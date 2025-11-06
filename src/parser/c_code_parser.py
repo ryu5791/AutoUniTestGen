@@ -1,0 +1,285 @@
+"""
+CCodeParserモジュール
+
+C言語ソースコードを解析してParseDataを生成
+"""
+
+import sys
+import os
+from typing import Optional
+
+# パスを追加
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
+from src.utils import setup_logger, read_file
+from src.data_structures import ParsedData, FunctionInfo
+from src.parser.preprocessor import Preprocessor
+from src.parser.ast_builder import ASTBuilder
+from src.parser.condition_extractor import ConditionExtractor
+
+
+class CCodeParser:
+    """C言語コードパーサー"""
+    
+    def __init__(self):
+        """初期化"""
+        self.logger = setup_logger(__name__)
+        self.preprocessor = Preprocessor()
+        self.ast_builder = ASTBuilder()
+    
+    def parse(self, c_file_path: str, target_function: Optional[str] = None) -> Optional[ParsedData]:
+        """
+        C言語ファイルを解析
+        
+        Args:
+            c_file_path: C言語ファイルのパス
+            target_function: 対象関数名（Noneの場合は自動検出）
+        
+        Returns:
+            ParsedData（失敗時はNone）
+        """
+        try:
+            self.logger.info(f"C言語ファイルの解析を開始: {c_file_path}")
+            
+            # 1. ファイルを読み込み
+            code = read_file(c_file_path)
+            
+            # 2. 前処理
+            preprocessed_code = self.preprocessor.preprocess(code)
+            
+            # 3. ASTを構築
+            ast = self.ast_builder.build_ast(preprocessed_code)
+            
+            if ast is None:
+                self.logger.error("AST構築に失敗")
+                return None
+            
+            # 4. 関数情報を抽出
+            function_info = self._extract_function_info(ast, target_function)
+            
+            if function_info is None and target_function:
+                self.logger.error(f"対象関数が見つかりません: {target_function}")
+                return None
+            
+            # 5. 条件分岐を抽出
+            extractor = ConditionExtractor(
+                target_function=target_function or (function_info.name if function_info else None)
+            )
+            conditions = extractor.extract_conditions(ast)
+            
+            # 6. 外部関数を抽出
+            external_functions = self._extract_external_functions(conditions)
+            
+            # 7. グローバル変数を抽出
+            global_variables = self._extract_global_variables(ast)
+            
+            # 8. ParsedDataを構築
+            parsed_data = ParsedData(
+                file_name=os.path.basename(c_file_path),
+                function_name=target_function or (function_info.name if function_info else ""),
+                conditions=conditions,
+                external_functions=external_functions,
+                global_variables=global_variables,
+                function_info=function_info
+            )
+            
+            self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
+            return parsed_data
+            
+        except Exception as e:
+            self.logger.error(f"解析エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _extract_function_info(self, ast, target_function: Optional[str] = None) -> Optional[FunctionInfo]:
+        """
+        関数情報を抽出
+        
+        Args:
+            ast: AST
+            target_function: 対象関数名
+        
+        Returns:
+            FunctionInfo
+        """
+        from pycparser import c_ast
+        
+        class FunctionInfoVisitor(c_ast.NodeVisitor):
+            def __init__(self, target):
+                self.target = target
+                self.func_info = None
+            
+            def visit_FuncDef(self, node):
+                func_name = node.decl.name
+                
+                # 対象関数をチェック
+                if self.target is None or func_name == self.target:
+                    # 戻り値の型を取得
+                    return_type = "void"
+                    if hasattr(node.decl.type, 'type'):
+                        type_node = node.decl.type.type
+                        if hasattr(type_node, 'names'):
+                            return_type = ' '.join(type_node.names)
+                    
+                    # パラメータを取得
+                    parameters = []
+                    if node.decl.type.args:
+                        for param in node.decl.type.args.params:
+                            if hasattr(param, 'name') and param.name:
+                                param_type = "int"  # 簡易実装
+                                parameters.append({
+                                    'name': param.name,
+                                    'type': param_type
+                                })
+                    
+                    self.func_info = FunctionInfo(
+                        name=func_name,
+                        return_type=return_type,
+                        parameters=parameters
+                    )
+                    
+                    if self.target is None:
+                        # 最初の関数を返す
+                        return
+        
+        visitor = FunctionInfoVisitor(target_function)
+        visitor.visit(ast)
+        
+        return visitor.func_info
+    
+    def _extract_external_functions(self, conditions) -> list:
+        """
+        条件分岐から外部関数を抽出
+        
+        Args:
+            conditions: 条件分岐リスト
+        
+        Returns:
+            外部関数名のリスト
+        """
+        from src.utils import extract_all_function_names
+        
+        functions = set()
+        
+        for cond in conditions:
+            # 条件式から関数名を抽出
+            func_names = extract_all_function_names(cond.expression)
+            functions.update(func_names)
+        
+        # 一般的なC言語キーワードを除外
+        keywords = {'if', 'else', 'switch', 'case', 'default', 'for', 'while', 'do', 'return'}
+        functions = functions - keywords
+        
+        return sorted(list(functions))
+    
+    def _extract_global_variables(self, ast) -> list:
+        """
+        グローバル変数を抽出
+        
+        Args:
+            ast: AST
+        
+        Returns:
+            グローバル変数名のリスト
+        """
+        from pycparser import c_ast
+        
+        class GlobalVarVisitor(c_ast.NodeVisitor):
+            def __init__(self):
+                self.variables = []
+                self.in_function = False
+            
+            def visit_FuncDef(self, node):
+                # 関数内部はスキップ
+                self.in_function = True
+                self.generic_visit(node)
+                self.in_function = False
+            
+            def visit_Decl(self, node):
+                if not self.in_function and node.name:
+                    # 関数宣言でない場合のみ
+                    if not isinstance(node.type, c_ast.FuncDecl):
+                        self.variables.append(node.name)
+                self.generic_visit(node)
+        
+        visitor = GlobalVarVisitor()
+        visitor.visit(ast)
+        
+        return visitor.variables
+
+
+if __name__ == "__main__":
+    # CCodeParserのテスト
+    print("=== CCodeParser のテスト ===\n")
+    
+    # テスト用サンプルファイルを作成
+    sample_code = """
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+
+typedef enum {
+    m46 = 0,
+    m47,
+    m48,
+    mx2
+} mx26;
+
+uint16_t f4(void);
+mx26 mx27(void);
+void mx31(int param);
+
+mx26 mx63;
+uint16_t v9;
+
+void f1(void) {
+    if ((f4() & 223) != 0) {
+        v9 = 7;
+    }
+    
+    if ((mx63 == m47) || (mx63 == m46)) {
+        mx63 = mx27();
+        if ((mx63 == m48) || (mx63 == mx2)) {
+            mx31(64);
+        }
+    }
+    
+    switch (v9) {
+        case 0:
+            break;
+        case 1:
+            break;
+        default:
+            break;
+    }
+}
+"""
+    
+    # テストファイルに書き込み
+    test_file = "/tmp/test_parse.c"
+    with open(test_file, 'w') as f:
+        f.write(sample_code)
+    
+    # パーサーでテスト
+    parser = CCodeParser()
+    parsed_data = parser.parse(test_file, target_function="f1")
+    
+    if parsed_data:
+        print("✓ 解析成功！\n")
+        print(f"ファイル名: {parsed_data.file_name}")
+        print(f"関数名: {parsed_data.function_name}")
+        print(f"条件分岐数: {len(parsed_data.conditions)}")
+        print(f"外部関数: {parsed_data.external_functions}")
+        print(f"グローバル変数: {parsed_data.global_variables}")
+        
+        print("\n=== 検出された条件分岐 ===")
+        for i, cond in enumerate(parsed_data.conditions, 1):
+            print(f"{i}. [{cond.type.value}] {cond.expression}")
+            if cond.operator:
+                print(f"   左辺: {cond.left}")
+                print(f"   右辺: {cond.right}")
+            if cond.cases:
+                print(f"   cases: {cond.cases}")
+        
+        print("\n✓ CCodeParserが正常に動作しました")
+    else:
+        print("❌ 解析に失敗しました")
