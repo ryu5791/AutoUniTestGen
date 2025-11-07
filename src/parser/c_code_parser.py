@@ -72,14 +72,19 @@ class CCodeParser:
             # 7. グローバル変数を抽出
             global_variables = self._extract_global_variables(ast)
             
-            # 8. ParsedDataを構築
+            # 8. enum定数を抽出
+            enums, enum_values = self._extract_enums(ast)
+            
+            # 9. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
                 function_name=target_function or (function_info.name if function_info else ""),
                 conditions=conditions,
                 external_functions=external_functions,
                 global_variables=global_variables,
-                function_info=function_info
+                function_info=function_info,
+                enums=enums,
+                enum_values=enum_values
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
@@ -206,6 +211,49 @@ class CCodeParser:
         visitor.visit(ast)
         
         return visitor.variables
+    
+    def _extract_enums(self, ast) -> tuple:
+        """
+        enum定数を抽出
+        
+        Args:
+            ast: AST
+        
+        Returns:
+            (enum辞書, enum値リスト)のタプル
+            enum辞書: {enum型名: [定数リスト]}
+            enum値リスト: すべてのenum定数のリスト
+        """
+        from pycparser import c_ast
+        
+        enums = {}
+        enum_values = []
+        
+        class EnumVisitor(c_ast.NodeVisitor):
+            def __init__(self):
+                self.enums = {}
+                self.enum_values = []
+            
+            def visit_Enum(self, node):
+                # enum定義の処理
+                enum_name = node.name if node.name else "anonymous"
+                
+                if node.values:
+                    constants = []
+                    for enumerator in node.values.enumerators:
+                        const_name = enumerator.name
+                        constants.append(const_name)
+                        self.enum_values.append(const_name)
+                    
+                    if enum_name != "anonymous":
+                        self.enums[enum_name] = constants
+                
+                self.generic_visit(node)
+        
+        visitor = EnumVisitor()
+        visitor.visit(ast)
+        
+        return visitor.enums, visitor.enum_values
 
 
 if __name__ == "__main__":

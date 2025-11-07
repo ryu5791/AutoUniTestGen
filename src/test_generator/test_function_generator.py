@@ -202,35 +202,36 @@ class TestFunctionGenerator:
         
         # 条件タイプに応じて初期化コードを生成
         if matching_condition.type == ConditionType.SIMPLE_IF:
-            init = self._generate_simple_condition_init(matching_condition, test_case.truth)
+            init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
             if init:
                 lines.append(f"    {init};")
         
         elif matching_condition.type == ConditionType.OR_CONDITION:
-            init_list = self._generate_or_condition_init(matching_condition, test_case.truth)
+            init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
                 lines.append(f"    {init};")
         
         elif matching_condition.type == ConditionType.AND_CONDITION:
-            init_list = self._generate_and_condition_init(matching_condition, test_case.truth)
+            init_list = self._generate_and_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
                 lines.append(f"    {init};")
         
         elif matching_condition.type == ConditionType.SWITCH:
-            init = self._generate_switch_init(matching_condition, test_case)
+            init = self._generate_switch_init(matching_condition, test_case, parsed_data)
             if init:
                 lines.append(f"    {init};")
         
         lines.append("")
         return '\n'.join(lines)
     
-    def _generate_simple_condition_init(self, condition: Condition, truth: str) -> Optional[str]:
+    def _generate_simple_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> Optional[str]:
         """
         単純条件の初期化コードを生成
         
         Args:
             condition: 条件
             truth: 真偽
+            parsed_data: 解析済みデータ
         
         Returns:
             初期化コード
@@ -239,12 +240,18 @@ class TestFunctionGenerator:
         test_value = self.boundary_calc.generate_test_value(condition.expression, truth)
         
         if test_value:
+            # 生成された初期化コードが関数やenum定数を使っていないか検証
+            test_value = self._validate_and_fix_init_code(test_value, parsed_data)
             return test_value
         
         # 境界値計算できない場合
         variables = self.boundary_calc.extract_variables(condition.expression)
         if variables:
             var = variables[0]
+            # 関数かenum定数でないことを確認
+            if self._is_function_or_enum(var, parsed_data):
+                return f"// TODO: {var}は関数またはenum定数のため初期化できません"
+            
             if truth == 'T':
                 return f"{var} = 1  // TODO: 真になる値を設定"
             else:
@@ -252,13 +259,14 @@ class TestFunctionGenerator:
         
         return None
     
-    def _generate_or_condition_init(self, condition: Condition, truth: str) -> List[str]:
+    def _generate_or_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> List[str]:
         """
         OR条件の初期化コードを生成
         
         Args:
             condition: 条件
             truth: 真偽パターン
+            parsed_data: 解析済みデータ
         
         Returns:
             初期化コードのリスト
@@ -274,49 +282,71 @@ class TestFunctionGenerator:
                 test_value = self.boundary_calc.generate_test_value(cond, truth_val)
                 
                 if test_value:
+                    # 関数やenum定数の誤使用を修正
+                    test_value = self._validate_and_fix_init_code(test_value, parsed_data)
                     init_list.append(test_value)
                 else:
                     # デフォルト値
                     variables = self.boundary_calc.extract_variables(cond)
                     if variables:
                         var = variables[0]
-                        val = '1' if truth_val == 'T' else '0'
-                        init_list.append(f"{var} = {val}  // TODO: 適切な値を設定")
+                        # 関数またはenum定数でないことを確認
+                        if self._is_function_or_enum(var, parsed_data):
+                            init_list.append(f"// TODO: {var}は関数またはenum定数のため初期化できません")
+                        else:
+                            val = '1' if truth_val == 'T' else '0'
+                            init_list.append(f"{var} = {val}  // TODO: 適切な値を設定")
         
         return init_list
     
-    def _generate_and_condition_init(self, condition: Condition, truth: str) -> List[str]:
+    def _generate_and_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> List[str]:
         """
         AND条件の初期化コードを生成
         
         Args:
             condition: 条件
             truth: 真偽パターン
+            parsed_data: 解析済みデータ
         
         Returns:
             初期化コードのリスト
         """
         # OR条件と同じロジック
-        return self._generate_or_condition_init(condition, truth)
+        return self._generate_or_condition_init(condition, truth, parsed_data)
     
-    def _generate_switch_init(self, condition: Condition, test_case: TestCase) -> Optional[str]:
+    def _generate_switch_init(self, condition: Condition, test_case: TestCase, parsed_data: ParsedData) -> Optional[str]:
         """
         switch文の初期化コードを生成
         
         Args:
             condition: 条件
             test_case: テストケース
+            parsed_data: 解析済みデータ
         
         Returns:
             初期化コード
         """
-        # case値を抽出
+        switch_var = condition.expression
+        
+        # default caseの場合（先にチェック）
+        if 'case default' in test_case.condition.lower() or test_case.condition.lower().endswith('default'):
+            # caseに該当しない値を設定（999など）
+            return f"{switch_var} = 999  // default: caseに該当しない値"
+        
+        # 通常のcase値を抽出
         match = re.search(r'case\s+(\w+)', test_case.condition)
         if match:
             case_value = match.group(1)
-            switch_var = condition.expression
             
-            return f"{switch_var} = {case_value}"
+            # case_valueが関数またはenum定数かチェック
+            if self._is_function(case_value, parsed_data):
+                # 関数の場合はモックの戻り値を使用
+                return f"{switch_var} = mock_{case_value}_return_value"
+            elif self._is_enum_constant(case_value, parsed_data):
+                # enum定数の場合は別の変数に代入
+                return f"{switch_var} = {case_value}"
+            else:
+                return f"{switch_var} = {case_value}"
         
         return None
 
@@ -389,6 +419,87 @@ class TestFunctionGenerator:
         
         lines.append("")
         return '\n'.join(lines)
+
+
+    def _is_function(self, name: str, parsed_data: ParsedData) -> bool:
+        """
+        指定された名前が関数かどうか判定
+        
+        Args:
+            name: 識別子名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            関数の場合True
+        """
+        return name in parsed_data.external_functions
+    
+    def _is_enum_constant(self, name: str, parsed_data: ParsedData) -> bool:
+        """
+        指定された名前がenum定数かどうか判定
+        
+        Args:
+            name: 識別子名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            enum定数の場合True
+        """
+        return name in parsed_data.enum_values
+    
+    def _is_function_or_enum(self, name: str, parsed_data: ParsedData) -> bool:
+        """
+        指定された名前が関数またはenum定数かどうか判定
+        
+        Args:
+            name: 識別子名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            関数またはenum定数の場合True
+        """
+        return self._is_function(name, parsed_data) or self._is_enum_constant(name, parsed_data)
+    
+    def _validate_and_fix_init_code(self, init_code: str, parsed_data: ParsedData) -> str:
+        """
+        初期化コードを検証して問題があれば修正
+        
+        Args:
+            init_code: 初期化コード
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            修正後の初期化コード
+        """
+        # "変数 = 値" の形式から変数と値を抽出
+        match = re.match(r'(\w+)\s*=\s*(.+)', init_code)
+        if not match:
+            return init_code
+        
+        var_name = match.group(1)
+        value_part = match.group(2).strip()
+        
+        # 値の部分に関数が含まれている場合
+        if self._is_function(value_part, parsed_data):
+            # 関数の場合はモックの戻り値を使用
+            return f"{var_name} = mock_{value_part}_return_value  // 修正: {value_part}は関数"
+        
+        # 値の部分にenum定数が含まれている場合はそのまま（正しい使い方）
+        
+        # 変数自体が関数の場合（エラー）
+        if self._is_function(var_name, parsed_data):
+            return f"// ERROR: {var_name}は関数のため変数として初期化できません。モック設定を使用してください。"
+        
+        # 変数自体がenum定数の場合（エラー）
+        if self._is_enum_constant(var_name, parsed_data):
+            # enum定数は代入できないので、適切な変数を見つける
+            # グローバル変数の中から適切なものを探す
+            for gvar in parsed_data.global_variables:
+                if not self._is_function_or_enum(gvar, parsed_data):
+                    return f"{gvar} = {value_part}  // 修正: {var_name}はenum定数のため{gvar}に代入"
+            return f"// ERROR: {var_name}はenum定数のため変数として初期化できません"
+        
+        return init_code
 
 
 if __name__ == "__main__":

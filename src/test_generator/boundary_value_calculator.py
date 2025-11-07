@@ -83,8 +83,31 @@ class BoundaryValueCalculator:
         Examples:
             >>> calc.parse_comparison("v10 > 30")
             {'variable': 'v10', 'operator': '>', 'value': 30}
+            >>> calc.parse_comparison("mx63 == m47")
+            {'variable': 'mx63', 'operator': '==', 'value': 'm47', 'is_identifier': True}
         """
         # 比較演算子のパターン（長い順にマッチング）
+        # まず、識別子同士の比較を試す
+        identifier_patterns = [
+            (r'(\w+(?:\[\d+\])?)\s*==\s*(\w+)', '=='),
+            (r'(\w+(?:\[\d+\])?)\s*!=\s*(\w+)', '!='),
+        ]
+        
+        for pattern, operator in identifier_patterns:
+            match = re.search(pattern, expression)
+            if match:
+                var = match.group(1)
+                val = match.group(2)
+                # 値が数値でない場合は識別子
+                if not val.lstrip('-').isdigit():
+                    return {
+                        'variable': var,
+                        'operator': operator,
+                        'value': val,
+                        'is_identifier': True
+                    }
+        
+        # 次に、数値との比較
         patterns = [
             (r'(\w+(?:\[\d+\])?)\s*>=\s*(-?\d+)', '>='),
             (r'(\w+(?:\[\d+\])?)\s*<=\s*(-?\d+)', '<='),
@@ -121,11 +144,26 @@ class BoundaryValueCalculator:
         if comparison:
             variable = comparison['variable']
             operator = comparison['operator']
-            value = comparison['value']
+            value = comparison.get('value')
+            is_identifier = comparison.get('is_identifier', False)
             
-            test_value = self.calculate_boundary(operator, value, truth)
-            
-            return f"{variable} = {test_value}"
+            if is_identifier:
+                # 識別子同士の比較（例: mx63 == m47）
+                if operator == '==':
+                    if truth == 'T':
+                        return f"{variable} = {value}"
+                    else:
+                        # 偽の場合は異なる値（簡易実装）
+                        return f"{variable} = 0  // TODO: {value}以外の値を設定"
+                elif operator == '!=':
+                    if truth == 'T':
+                        return f"{variable} = 0  // TODO: {value}以外の値を設定"
+                    else:
+                        return f"{variable} = {value}"
+            else:
+                # 数値との比較
+                test_value = self.calculate_boundary(operator, value, truth)
+                return f"{variable} = {test_value}"
         
         return None
     

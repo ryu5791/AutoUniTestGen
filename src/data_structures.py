@@ -106,6 +106,65 @@ class TestCode:
 
 
 @dataclass
+class FunctionInfo:
+    """関数情報"""
+    name: str
+    return_type: str = "void"
+    parameters: List[Dict[str, str]] = field(default_factory=list)
+    local_variables: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'return_type': self.return_type,
+            'parameters': self.parameters,
+            'local_variables': self.local_variables
+        }
+
+
+@dataclass
+class MockFunction:
+    """モック関数の情報"""
+    name: str
+    return_type: str = "void"
+    parameters: List[Dict[str, str]] = field(default_factory=list)
+    return_variable: str = ""
+    call_count_variable: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'return_type': self.return_type,
+            'parameters': self.parameters,
+            'return_variable': self.return_variable,
+            'call_count_variable': self.call_count_variable
+        }
+
+
+@dataclass
+class ParsedData:
+    """C言語解析結果データ"""
+    file_name: str
+    function_name: str
+    conditions: List[Condition] = field(default_factory=list)
+    external_functions: List[str] = field(default_factory=list)
+    global_variables: List[str] = field(default_factory=list)
+    function_info: Optional[FunctionInfo] = None
+    enums: Dict[str, List[str]] = field(default_factory=dict)  # enum型名 -> 定数リスト
+    enum_values: List[str] = field(default_factory=list)  # すべてのenum定数
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'file_name': self.file_name,
+            'function_name': self.function_name,
+            'conditions': [c.to_dict() for c in self.conditions],
+            'external_functions': self.external_functions,
+            'global_variables': self.global_variables,
+            'function_info': self.function_info.to_dict() if self.function_info else None
+        }
+
+
+@dataclass
 class IOTableData:
     """I/O表のデータ"""
     input_variables: List[str] = field(default_factory=list)
