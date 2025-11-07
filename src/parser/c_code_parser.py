@@ -45,8 +45,8 @@ class CCodeParser:
         try:
             self.logger.info(f"C言語ファイルの解析を開始: {c_file_path}")
             
-            # 1. ファイルを読み込み
-            code = read_file(c_file_path)
+            # 1. ファイルを読み込み（自動エンコーディング検出）
+            code = read_file(c_file_path, encoding='auto')
             
             # 2. 前処理
             preprocessed_code = self.preprocessor.preprocess(code)

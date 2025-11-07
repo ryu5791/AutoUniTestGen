@@ -49,11 +49,11 @@ def setup_logger(name: str = __name__, level: int = logging.INFO) -> logging.Log
 # ファイルI/O
 def read_file(filepath: str, encoding: str = 'utf-8') -> str:
     """
-    ファイルを読み込む
+    ファイルを読み込む（自動エンコーディング検出対応）
     
     Args:
         filepath: ファイルパス
-        encoding: エンコーディング
+        encoding: エンコーディング（'auto'の場合は自動検出）
     
     Returns:
         ファイル内容
@@ -65,11 +65,53 @@ def read_file(filepath: str, encoding: str = 'utf-8') -> str:
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"ファイルが見つかりません: {filepath}")
     
-    try:
-        with open(filepath, 'r', encoding=encoding) as f:
-            return f.read()
-    except Exception as e:
-        raise IOError(f"ファイル読み込みエラー: {filepath} - {str(e)}")
+    # エンコーディングが'auto'でない場合は指定されたエンコーディングを使用
+    if encoding != 'auto':
+        try:
+            with open(filepath, 'r', encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError as e:
+            # UTF-8で失敗した場合、自動検出にフォールバック
+            logger = setup_logger(__name__)
+            logger.warning(f"指定されたエンコーディング({encoding})での読み込みに失敗。自動検出を試みます。")
+        except Exception as e:
+            raise IOError(f"ファイル読み込みエラー: {filepath} - {str(e)}")
+    
+    # 自動エンコーディング検出
+    # 日本語環境でよく使われるエンコーディングを優先順に試行
+    encodings_to_try = [
+        'utf-8',           # UTF-8（標準）
+        'cp932',           # Windows日本語（Shift-JIS拡張）
+        'shift-jis',       # Shift-JIS
+        'euc-jp',          # EUC-JP
+        'iso-2022-jp',     # JIS
+        'utf-16',          # UTF-16
+        'latin-1',         # Latin-1（バイナリセーフ）
+    ]
+    
+    last_error = None
+    for enc in encodings_to_try:
+        try:
+            with open(filepath, 'r', encoding=enc) as f:
+                content = f.read()
+                # 成功した場合、使用したエンコーディングをログ出力
+                if enc != 'utf-8':
+                    logger = setup_logger(__name__)
+                    logger.info(f"ファイルを {enc} として読み込みました: {filepath}")
+                return content
+        except UnicodeDecodeError:
+            last_error = f"エンコーディング {enc} での読み込みに失敗"
+            continue
+        except Exception as e:
+            last_error = str(e)
+            continue
+    
+    # すべてのエンコーディングで失敗した場合
+    raise IOError(
+        f"ファイル読み込みエラー: {filepath}\n"
+        f"試行したエンコーディング: {', '.join(encodings_to_try)}\n"
+        f"最後のエラー: {last_error}"
+    )
 
 
 def write_file(filepath: str, content: str, encoding: str = 'utf-8') -> None:
