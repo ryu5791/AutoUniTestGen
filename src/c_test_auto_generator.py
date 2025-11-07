@@ -67,7 +67,10 @@ class CTestAutoGenerator:
     
     def _init_components(self):
         """各コンポーネントを初期化"""
-        self.parser = CCodeParser()
+        # configからdefinesを取得
+        defines = self.config.get('defines', {})
+        
+        self.parser = CCodeParser(defines=defines)
         self.truth_table_generator = TruthTableGenerator()
         self.test_generator = UnityTestGenerator()
         self.io_table_generator = IOTableGenerator()

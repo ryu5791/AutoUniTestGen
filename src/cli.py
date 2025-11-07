@@ -96,6 +96,26 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
+        '-D', '--define',
+        action='append',
+        metavar='MACRO[=VALUE]',
+        help='マクロを定義 (例: -D TYPE1 -D MAX_SIZE=100)'
+    )
+    
+    parser.add_argument(
+        '--preset',
+        type=str,
+        metavar='NAME',
+        help='モデルプリセットを使用 (例: --preset model_a)'
+    )
+    
+    parser.add_argument(
+        '--list-presets',
+        action='store_true',
+        help='利用可能なモデルプリセット一覧を表示'
+    )
+    
+    parser.add_argument(
         '-c', '--config',
         type=str,
         metavar='FILE',
@@ -354,6 +374,13 @@ def main():
     parser = create_parser()
     args = parser.parse_args()
     
+    # プリセット一覧表示モード
+    if args.list_presets:
+        from .model_preset_manager import ModelPresetManager
+        manager = ModelPresetManager()
+        manager.list_presets()
+        sys.exit(0)
+    
     # 設定ファイル作成モード
     if args.create_config:
         success = ConfigManager.create_default_config(args.create_config)
@@ -411,8 +438,41 @@ def main():
     config_manager = ConfigManager(args.config)
     config = config_manager.load()
     
+    # マクロ定義を収集
+    config_dict = config.to_dict()
+    defines = {}
+    
+    # --presetオプションからマクロ定義を取得
+    if hasattr(args, 'preset') and args.preset:
+        from .model_preset_manager import ModelPresetManager
+        preset_manager = ModelPresetManager()
+        preset_defines = preset_manager.get_preset(args.preset)
+        if preset_defines:
+            defines.update(preset_defines)
+            error_handler.info(f"プリセット '{args.preset}' を適用: {list(preset_defines.keys())}")
+        else:
+            sys.exit(1)
+    
+    # -Dオプションからマクロ定義を抽出（プリセットを上書き）
+    if hasattr(args, 'define') and args.define:
+        for define_str in args.define:
+            if '=' in define_str:
+                # -D MACRO=VALUE 形式
+                name, value = define_str.split('=', 1)
+                defines[name.strip()] = value.strip()
+            else:
+                # -D MACRO 形式（値なし → 1として定義）
+                defines[define_str.strip()] = '1'
+        
+        error_handler.info(f"追加のマクロ定義: {list(args.define)}")
+    
+    # configに設定
+    if defines:
+        config_dict['defines'] = defines
+        error_handler.info(f"最終的なマクロ定義: {defines}")
+    
     # 生成器初期化
-    generator = CTestAutoGenerator(config=config.to_dict())
+    generator = CTestAutoGenerator(config=config_dict)
     
     # パフォーマンス監視を生成器に設定
     if perf_monitor:

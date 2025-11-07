@@ -6,7 +6,7 @@ C言語ソースコードを解析してParseDataを生成
 
 import sys
 import os
-from typing import Optional
+from typing import Optional, Dict
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -20,10 +20,15 @@ from src.parser.condition_extractor import ConditionExtractor
 class CCodeParser:
     """C言語コードパーサー"""
     
-    def __init__(self):
-        """初期化"""
+    def __init__(self, defines: Dict[str, str] = None):
+        """
+        初期化
+        
+        Args:
+            defines: 事前定義するマクロ辞書 {マクロ名: 値}
+        """
         self.logger = setup_logger(__name__)
-        self.preprocessor = Preprocessor()
+        self.preprocessor = Preprocessor(defines=defines)
         self.ast_builder = ASTBuilder()
     
     def parse(self, c_file_path: str, target_function: Optional[str] = None) -> Optional[ParsedData]:

@@ -1,0 +1,42 @@
+{
+  "presets": {
+    "model_a": {
+      "description": "Aモデル用の設定",
+      "defines": {
+        "MODEL_A": "1",
+        "TYPE1": "1",
+        "TYPE2": "1",
+        "MAX_SENSORS": "10",
+        "ENABLE_DEBUG": "1"
+      }
+    },
+    "model_b": {
+      "description": "Bモデル用の設定",
+      "defines": {
+        "MODEL_B": "1",
+        "TYPE1": "1",
+        "TYPE3": "1",
+        "MAX_SENSORS": "8",
+        "ENABLE_LOGGING": "1"
+      }
+    },
+    "model_c": {
+      "description": "Cモデル用の設定",
+      "defines": {
+        "MODEL_C": "1",
+        "TYPE2": "1",
+        "TYPE3": "1",
+        "DEBUG_MODE": "1",
+        "MAX_BUFFER_SIZE": "256"
+      }
+    },
+    "production": {
+      "description": "本番環境用の設定",
+      "defines": {
+        "PRODUCTION": "1",
+        "NDEBUG": "1",
+        "OPTIMIZE_LEVEL": "3"
+      }
+    }
+  }
+}
