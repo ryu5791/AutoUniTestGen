@@ -122,6 +122,18 @@ def create_parser() -> argparse.ArgumentParser:
         help='設定ファイルパス (JSON形式)'
     )
     
+    parser.add_argument(
+        '--overwrite',
+        action='store_true',
+        help='既存ファイルを確認なしで上書き'
+    )
+    
+    parser.add_argument(
+        '--no-overwrite',
+        action='store_true',
+        help='既存ファイルがある場合はエラーで終了'
+    )
+    
     # 出力ファイル名指定
     parser.add_argument(
         '--truth-table',
@@ -523,7 +535,51 @@ def main():
         # 通常モード（単一ファイル処理）
         # 入力ファイルの検証
         error_handler.validate_input_file(args.input)
-        error_handler.validate_output_dir(args.output)
+        
+        # 出力ディレクトリをユニーク化（番号付加）
+        from pathlib import Path
+        
+        def get_unique_output_dir_cli(base_dir):
+            """既存ディレクトリがある場合、(1), (2)... と番号を付加"""
+            base_path = Path(base_dir)
+            if not base_path.exists():
+                return base_path
+            counter = 1
+            while True:
+                new_path = Path(f"{base_dir}({counter})")
+                if not new_path.exists():
+                    return new_path
+                counter += 1
+                if counter > 1000:
+                    raise RuntimeError(f"出力ディレクトリの番号が1000を超えました")
+        
+        # ユニークな出力ディレクトリを取得
+        original_output = args.output
+        unique_output = get_unique_output_dir_cli(args.output)
+        
+        if str(unique_output) != original_output:
+            print(f"📁 既存ディレクトリを検出: 出力先を '{unique_output}' に変更しました")
+        
+        # args.outputをユニーク化したパスに更新
+        args.output = str(unique_output)
+        
+        # 出力ディレクトリの検証（上書き制御）
+        force_overwrite = getattr(args, 'overwrite', False)
+        no_overwrite = getattr(args, 'no_overwrite', False)
+        
+        # 矛盾するオプションのチェック
+        if force_overwrite and no_overwrite:
+            print("❌ エラー: --overwrite と --no-overwrite は同時に指定できません", file=sys.stderr)
+            sys.exit(1)
+        
+        error_handler.validate_output_dir(
+            args.output, 
+            check_existing=True, 
+            force_overwrite=force_overwrite
+        )
+        
+        # 個別ファイルの上書きチェック用に保存
+        generator.no_overwrite = no_overwrite
         
         # 生成モード判定と実行
         if args.truth_only:

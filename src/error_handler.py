@@ -308,12 +308,15 @@ class ErrorHandler:
         self.info(f"入力ファイル検証成功: {file_path}")
         return True
     
-    def validate_output_dir(self, output_dir: str) -> bool:
+    def validate_output_dir(self, output_dir: str, check_existing: bool = True, 
+                           force_overwrite: bool = False) -> bool:
         """
         出力ディレクトリの検証
         
         Args:
             output_dir: 出力ディレクトリパス
+            check_existing: 既存ファイルをチェックするか
+            force_overwrite: 強制上書きフラグ
         
         Returns:
             検証成功時True
@@ -336,6 +339,19 @@ class ErrorHandler:
                     recovery_hint="親ディレクトリへの書き込み権限を確認してください。",
                     original_error=e
                 )
+        else:
+            # ディレクトリが既に存在する場合
+            if check_existing:
+                # 既存ファイルをチェック
+                existing_files = list(path.glob('*'))
+                if existing_files:
+                    if force_overwrite:
+                        self.info(f"出力ディレクトリには {len(existing_files)} 個のファイルが存在しますが、上書きします")
+                    else:
+                        self.warning(f"⚠️  出力ディレクトリには既に {len(existing_files)} 個のファイルが存在します")
+                        self.warning(f"   既存ファイルは上書きされる可能性があります")
+                        self.warning(f"   上書きを防ぐには --no-overwrite オプションを使用してください")
+                        self.warning(f"   強制上書きするには --overwrite オプションを使用してください")
         
         # 書き込み権限の確認
         if not path.is_dir() or not path.stat().st_mode & 0o200:
@@ -347,6 +363,40 @@ class ErrorHandler:
             )
         
         self.info(f"出力ディレクトリ検証成功: {output_dir}")
+        return True
+    
+    def check_file_overwrite(self, file_path: str, no_overwrite: bool = False) -> bool:
+        """
+        ファイルの上書きをチェック
+        
+        Args:
+            file_path: ファイルパス
+            no_overwrite: 上書き禁止フラグ
+        
+        Returns:
+            書き込み可能ならTrue
+        
+        Raises:
+            GeneratorError: 上書き禁止で既存ファイルがある場合
+        """
+        path = Path(file_path)
+        
+        if path.exists():
+            if no_overwrite:
+                raise GeneratorError(
+                    f"出力ファイルが既に存在します: {file_path}",
+                    ErrorCode.OUTPUT_ERROR,
+                    ErrorContext(file_path=file_path),
+                    recovery_hint=(
+                        "以下の対処方法があります:\n"
+                        "1. 既存ファイルを削除または移動する\n"
+                        "2. 別の出力ディレクトリを指定する (-o オプション)\n"
+                        "3. --overwrite オプションで強制上書きする"
+                    )
+                )
+            else:
+                self.warning(f"⚠️  既存ファイルを上書きします: {file_path}")
+        
         return True
     
     def get_error_summary(self) -> str:

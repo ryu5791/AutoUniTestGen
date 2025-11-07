@@ -17,6 +17,27 @@ from .test_generator.unity_test_generator import UnityTestGenerator
 from .io_table.io_table_generator import IOTableGenerator
 from .output.excel_writer import ExcelWriter
 
+# 出力ディレクトリ管理をインライン関数として定義
+def get_unique_output_dir(base_dir: str) -> Path:
+    """
+    ユニークな出力ディレクトリパスを取得
+    既存のディレクトリがある場合、(1), (2), ... と番号を付加
+    """
+    base_path = Path(base_dir)
+    
+    if not base_path.exists():
+        return base_path
+    
+    counter = 1
+    while True:
+        new_path = Path(f"{base_dir}({counter})")
+        if not new_path.exists():
+            return new_path
+        counter += 1
+        
+        if counter > 1000:
+            raise RuntimeError(f"出力ディレクトリの番号が1000を超えました: {base_dir}")
+
 
 @dataclass
 class GenerationResult:
@@ -63,6 +84,7 @@ class CTestAutoGenerator:
             config: 設定情報（オプション）
         """
         self.config = config or {}
+        self.no_overwrite = False  # 上書き禁止フラグ
         self._init_components()
     
     def _init_components(self):
@@ -102,7 +124,7 @@ class CTestAutoGenerator:
         result = GenerationResult()
         
         try:
-            # 出力ディレクトリ作成
+            # 出力ディレクトリ作成（CLIで既にユニーク化済み）
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
             
@@ -112,6 +134,28 @@ class CTestAutoGenerator:
             test_code_name = test_code_name or f"test_{base_name}_{target_function}.c"
             io_table_name = io_table_name or f"{base_name}_{target_function}_io_table.xlsx"
             
+            # 出力ファイルパスの準備
+            truth_table_path = output_path / truth_table_name
+            test_code_path = output_path / test_code_name
+            io_table_path = output_path / io_table_name
+            
+            # no_overwriteフラグがある場合、既存ファイルをチェック
+            if self.no_overwrite:
+                for file_path, file_type in [
+                    (truth_table_path, "真偽表"),
+                    (test_code_path, "テストコード"),
+                    (io_table_path, "I/O表")
+                ]:
+                    if file_path.exists():
+                        raise Exception(
+                            f"❌ 既存の{file_type}ファイルが存在します: {file_path}\n"
+                            f"   --no-overwrite オプションが指定されているため、処理を中断します。\n"
+                            f"   対処方法:\n"
+                            f"   1. 既存ファイルを削除または移動する\n"
+                            f"   2. 別の出力ディレクトリを指定する (-o オプション)\n"
+                            f"   3. --overwrite オプションで強制上書きする"
+                        )
+            
             # 1. C言語ファイルを解析
             print(f"🔍 Step 1/4: C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
@@ -120,7 +164,6 @@ class CTestAutoGenerator:
             # 2. 真偽表を生成
             print(f"📊 Step 2/4: MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
-            truth_table_path = output_path / truth_table_name
             self.excel_writer.write_truth_table(truth_table, str(truth_table_path))
             result.truth_table_path = truth_table_path
             print(f"   ✓ 真偽表生成完了: {len(truth_table.test_cases)}個のテストケース")
@@ -128,7 +171,6 @@ class CTestAutoGenerator:
             # 3. Unityテストコードを生成
             print(f"🧪 Step 3/4: Unityテストコードを生成中...")
             test_code = self.test_generator.generate(truth_table, parsed_data)
-            test_code_path = output_path / test_code_name
             test_code.save(str(test_code_path))
             result.test_code_path = test_code_path
             print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数")
@@ -136,7 +178,6 @@ class CTestAutoGenerator:
             # 4. I/O表を生成
             print(f"📝 Step 4/4: I/O一覧表を生成中...")
             io_table = self.io_table_generator.generate(test_code, truth_table)
-            io_table_path = output_path / io_table_name
             self.excel_writer.write_io_table(io_table, str(io_table_path))
             result.io_table_path = io_table_path
             print(f"   ✓ I/O表生成完了: {len(io_table.test_data)}個のテストケース")
