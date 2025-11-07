@@ -20,18 +20,23 @@ from src.utils import setup_logger
 class Preprocessor:
     """C言語プリプロセッサ"""
     
-    def __init__(self, defines: Dict[str, str] = None):
+    def __init__(self, defines: Dict[str, str] = None, include_paths: List[str] = None, enable_includes: bool = False):
         """
         初期化
         
         Args:
             defines: 事前定義するマクロ辞書 {マクロ名: 値}
+            include_paths: インクルードパスのリスト
+            enable_includes: ヘッダーファイルの読み込みを有効化するか
         """
         self.logger = setup_logger(__name__)
         self.defines: Dict[str, str] = defines.copy() if defines else {}
-        self.include_paths: List[str] = []
+        self.include_paths: List[str] = include_paths.copy() if include_paths else []
+        self.enable_includes: bool = enable_includes
         # 関数マクロを格納 {マクロ名: (パラメータリスト, 本体)}
         self.function_macros: Dict[str, Tuple[List[str], str]] = {}
+        # インクルード済みファイルを追跡（循環インクルード防止）
+        self.included_files: set = set()
     
     def preprocess(self, code: str) -> str:
         """
@@ -546,17 +551,129 @@ class Preprocessor:
         Returns:
             #include処理後のコード
         """
+        if not self.enable_includes:
+            # インクルード機能が無効の場合は従来通りコメント化
+            lines = code.split('\n')
+            processed_lines = []
+            
+            for line in lines:
+                include_match = re.match(r'^\s*#include\s+[<"](.+?)[>"]', line)
+                if include_match:
+                    processed_lines.append(f"/* {line} */")
+                else:
+                    processed_lines.append(line)
+            
+            return '\n'.join(processed_lines)
+        
+        # インクルード機能が有効の場合はヘッダーファイルを読み込む
         lines = code.split('\n')
         processed_lines = []
         
         for line in lines:
-            # #include の検出
-            include_match = re.match(r'^\s*#include\s+[<"](.+?)[>"]', line)
+            include_match = re.match(r'^\s*#include\s+([<"])(.+?)[>"]', line)
             
             if include_match:
-                # すべての#includeをコメントアウト
-                # pycparserは#includeディレクティブをサポートしない
-                processed_lines.append(f"/* {line} */")
+                quote_type = include_match.group(1)
+                header_file = include_match.group(2)
+                
+                # 標準ヘッダはコメント化（システムヘッダは読み込まない）
+                if quote_type == '<' or self._is_standard_header(header_file):
+                    processed_lines.append(f"/* {line} */")
+                    self.logger.debug(f"標準ヘッダをスキップ: {header_file}")
+                else:
+                    # ユーザー定義ヘッダを読み込み
+                    header_content = self._read_header_file(header_file)
+                    
+                    if header_content is not None:
+                        # #includeを読み込んだ内容で置換
+                        processed_lines.append(f"/* {line} - 展開開始 */")
+                        processed_lines.append(header_content)
+                        processed_lines.append(f"/* {line} - 展開終了 */")
+                        self.logger.info(f"✓ ヘッダーファイルを読み込み: {header_file}")
+                    else:
+                        # ファイルが見つからない場合はコメント化
+                        processed_lines.append(f"/* {line} - ファイルが見つかりません */")
+                        self.logger.warning(f"ヘッダーファイルが見つかりません: {header_file}")
+            else:
+                processed_lines.append(line)
+        
+        return '\n'.join(processed_lines)
+    
+    def _read_header_file(self, header_file: str) -> str:
+        """
+        ヘッダーファイルを読み込む
+        
+        Args:
+            header_file: ヘッダーファイル名
+        
+        Returns:
+            ヘッダーファイルの内容、見つからない場合はNone
+        """
+        import os
+        
+        # 循環インクルードのチェック
+        if header_file in self.included_files:
+            self.logger.warning(f"循環インクルードを検出: {header_file}")
+            return f"/* 循環インクルード: {header_file} */"
+        
+        # ヘッダーファイルを検索
+        search_paths = self.include_paths.copy()
+        
+        # カレントディレクトリも検索対象に追加
+        if '.' not in search_paths:
+            search_paths.insert(0, '.')
+        
+        for search_path in search_paths:
+            file_path = os.path.join(search_path, header_file)
+            
+            if os.path.exists(file_path):
+                try:
+                    # エンコーディング自動検出で読み込み
+                    from ..utils import read_file
+                    
+                    # インクルード済みとしてマーク
+                    self.included_files.add(header_file)
+                    
+                    content = read_file(file_path, encoding='auto')
+                    
+                    # ヘッダーファイルの内容も前処理（再帰的に処理）
+                    # ただし、#includeは処理しない（循環を避ける）
+                    processed_content = self._preprocess_header_content(content)
+                    
+                    return processed_content
+                    
+                except Exception as e:
+                    self.logger.error(f"ヘッダーファイルの読み込みエラー: {file_path} - {e}")
+                    return None
+        
+        # ファイルが見つからない
+        return None
+    
+    def _preprocess_header_content(self, content: str) -> str:
+        """
+        ヘッダーファイルの内容を前処理
+        
+        Args:
+            content: ヘッダーファイルの内容
+        
+        Returns:
+            前処理済みの内容
+        """
+        # コメント削除
+        content = self._remove_comments(content)
+        
+        # #defineを収集（ヘッダー内のマクロも利用可能に）
+        content = self._collect_defines(content)
+        
+        # 条件付きコンパイルを処理
+        content = self._process_conditional_compilation(content)
+        
+        # #includeは無効化（ネストしたインクルードは処理しない）
+        lines = content.split('\n')
+        processed_lines = []
+        for line in lines:
+            if re.match(r'^\s*#include\s+', line):
+                processed_lines.append(f"/* {line} - ネストしたインクルード */")
             else:
                 processed_lines.append(line)
         

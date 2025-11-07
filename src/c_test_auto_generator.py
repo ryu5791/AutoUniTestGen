@@ -92,7 +92,15 @@ class CTestAutoGenerator:
         # configからdefinesを取得
         defines = self.config.get('defines', {})
         
-        self.parser = CCodeParser(defines=defines)
+        # configからinclude関連の設定を取得
+        include_paths = self.config.get('include_paths', [])
+        enable_includes = self.config.get('enable_includes', False)
+        
+        self.parser = CCodeParser(
+            defines=defines,
+            include_paths=include_paths,
+            enable_includes=enable_includes
+        )
         self.truth_table_generator = TruthTableGenerator()
         self.test_generator = UnityTestGenerator()
         self.io_table_generator = IOTableGenerator()

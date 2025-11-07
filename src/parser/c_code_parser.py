@@ -20,15 +20,21 @@ from src.parser.condition_extractor import ConditionExtractor
 class CCodeParser:
     """C言語コードパーサー"""
     
-    def __init__(self, defines: Dict[str, str] = None):
+    def __init__(self, defines: Dict[str, str] = None, include_paths: list = None, enable_includes: bool = False):
         """
         初期化
         
         Args:
             defines: 事前定義するマクロ辞書 {マクロ名: 値}
+            include_paths: インクルードパスのリスト
+            enable_includes: ヘッダーファイルの読み込みを有効化するか
         """
         self.logger = setup_logger(__name__)
-        self.preprocessor = Preprocessor(defines=defines)
+        self.preprocessor = Preprocessor(
+            defines=defines,
+            include_paths=include_paths,
+            enable_includes=enable_includes
+        )
         self.ast_builder = ASTBuilder()
     
     def parse(self, c_file_path: str, target_function: Optional[str] = None) -> Optional[ParsedData]:

@@ -103,6 +103,19 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
+        '-I', '--include-path',
+        action='append',
+        metavar='PATH',
+        help='ヘッダーファイルの検索パス (例: -I ./include -I ../common)'
+    )
+    
+    parser.add_argument(
+        '--enable-includes',
+        action='store_true',
+        help='ヘッダーファイル（.h）の読み込みを有効化'
+    )
+    
+    parser.add_argument(
         '--preset',
         type=str,
         metavar='NAME',
@@ -482,6 +495,20 @@ def main():
     if defines:
         config_dict['defines'] = defines
         error_handler.info(f"最終的なマクロ定義: {defines}")
+    
+    # -Iオプションからインクルードパスを抽出
+    include_paths = []
+    if hasattr(args, 'include_path') and args.include_path:
+        include_paths = args.include_path
+        config_dict['include_paths'] = include_paths
+        error_handler.info(f"インクルードパス: {include_paths}")
+    
+    # --enable-includesオプション
+    if hasattr(args, 'enable_includes') and args.enable_includes:
+        config_dict['enable_includes'] = True
+        error_handler.info("ヘッダーファイル読み込みを有効化")
+        if not include_paths:
+            error_handler.info("インクルードパスが指定されていないため、カレントディレクトリのみを検索します")
     
     # 生成器初期化
     generator = CTestAutoGenerator(config=config_dict)
