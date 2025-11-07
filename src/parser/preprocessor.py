@@ -30,6 +30,8 @@ class Preprocessor:
         self.logger = setup_logger(__name__)
         self.defines: Dict[str, str] = defines.copy() if defines else {}
         self.include_paths: List[str] = []
+        # 関数マクロを格納 {マクロ名: (パラメータリスト, 本体)}
+        self.function_macros: Dict[str, Tuple[List[str], str]] = {}
     
     def preprocess(self, code: str) -> str:
         """
@@ -52,16 +54,19 @@ class Preprocessor:
         # 2. 条件付きコンパイル処理（#ifdef, #ifndef, #if）
         code = self._process_conditional_compilation(code)
         
-        # 3. マクロ展開
+        # 3. 関数マクロ展開
+        code = self._expand_function_macros(code)
+        
+        # 4. 通常マクロ展開
         code = self._expand_macros(code)
         
-        # 4. #include処理（削除）
+        # 5. #include処理（削除）
         code = self._handle_includes(code)
         
-        # 5. 残りのディレクティブ処理
+        # 6. 残りのディレクティブ処理
         code = self._process_remaining_directives(code)
         
-        # 6. コメント削除（最後に実行）
+        # 7. コメント削除（最後に実行）
         code = self._remove_comments(code)
         
         # マクロ定義のサマリーをログ出力
@@ -69,6 +74,11 @@ class Preprocessor:
             self.logger.info(f"有効なマクロ定義 (合計 {len(self.defines)} 個):")
             for name, value in sorted(self.defines.items()):
                 self.logger.debug(f"  {name} = {value}")
+        
+        if self.function_macros:
+            self.logger.info(f"有効な関数マクロ定義 (合計 {len(self.function_macros)} 個):")
+            for name, (params, _) in sorted(self.function_macros.items()):
+                self.logger.debug(f"  {name}({', '.join(params)})")
         
         self.logger.info("前処理が完了")
         return code
@@ -108,9 +118,36 @@ class Preprocessor:
         lines = code.split('\n')
         processed_lines = []
         source_defines = {}
+        source_function_macros = {}
         
         for line in lines:
-            # #define の検出
+            # 関数マクロの検出: #define MACRO(params) body
+            func_macro_match = re.match(
+                r'^\s*#define\s+(\w+)\s*\(([^)]*)\)\s+(.+)$', 
+                line
+            )
+            
+            if func_macro_match:
+                macro_name = func_macro_match.group(1)
+                params_str = func_macro_match.group(2).strip()
+                macro_body = func_macro_match.group(3).strip()
+                
+                # パラメータをリストに分割
+                params = [p.strip() for p in params_str.split(',') if p.strip()]
+                
+                # 外部から定義されていない場合のみ、コード内の定義を使用
+                if macro_name not in self.function_macros:
+                    self.function_macros[macro_name] = (params, macro_body)
+                    source_function_macros[macro_name] = (params, macro_body)
+                    self.logger.debug(
+                        f"関数マクロ検出: {macro_name}({', '.join(params)}) = {macro_body}"
+                    )
+                
+                # #define行はコメント化
+                processed_lines.append(f"// {line}")
+                continue
+            
+            # 通常のマクロの検出: #define MACRO value
             define_match = re.match(r'^\s*#define\s+(\w+)(?:\s+(.+?))?$', line)
             
             if define_match:
@@ -144,15 +181,208 @@ class Preprocessor:
             if len(source_defines) > 10:
                 self.logger.info(f"  ... 他 {len(source_defines) - 10}個")
         
+        if source_function_macros:
+            self.logger.info(f"🔧 ソースコード内の関数マクロ定義: {len(source_function_macros)}個")
+            for name, (params, body) in list(source_function_macros.items())[:10]:
+                self.logger.info(f"  ✓ {name}({', '.join(params)}) = {body}")
+            if len(source_function_macros) > 10:
+                self.logger.info(f"  ... 他 {len(source_function_macros) - 10}個")
+        
         # 全体の統計情報
         external_count = len([k for k in self.defines if k not in source_defines])
         if external_count > 0:
             self.logger.info(f"🔧 外部定義のマクロ: {external_count}個")
         
         total_count = len(self.defines)
-        self.logger.info(f"📊 使用されるマクロ定義の合計: {total_count}個")
+        total_func_count = len(self.function_macros)
+        self.logger.info(f"📊 使用されるマクロ定義の合計: {total_count}個 (通常) + {total_func_count}個 (関数)")
         
         return '\n'.join(processed_lines)
+    
+    
+    def _expand_function_macros(self, code: str) -> str:
+        """
+        関数マクロを展開
+        
+        Args:
+            code: ソースコード
+        
+        Returns:
+            関数マクロ展開後のコード
+        """
+        if not self.function_macros:
+            return code
+        
+        # 複数回展開（ネストしたマクロに対応）
+        max_iterations = 10
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            code_before = code
+            
+            for macro_name, (params, body) in self.function_macros.items():
+                # 関数マクロの呼び出しを検出して展開
+                code = self._expand_single_function_macro(code, macro_name, params, body)
+            
+            # 変化がなければ終了
+            if code == code_before:
+                break
+        
+        if iteration >= max_iterations:
+            self.logger.warning(
+                "関数マクロ展開が最大反復回数に達しました。"
+                "循環参照がある可能性があります。"
+            )
+        
+        return code
+    
+    def _expand_single_function_macro(self, code: str, macro_name: str, 
+                                       params: List[str], body: str) -> str:
+        """
+        単一の関数マクロを展開
+        
+        Args:
+            code: ソースコード
+            macro_name: マクロ名
+            params: パラメータリスト
+            body: マクロ本体
+        
+        Returns:
+            展開後のコード
+        """
+        result = []
+        i = 0
+        
+        while i < len(code):
+            # マクロ名を検索
+            pattern = r'\b' + re.escape(macro_name) + r'\s*\('
+            match = re.match(pattern, code[i:])
+            
+            if match:
+                # マクロ呼び出しの開始位置
+                start = i
+                i += len(match.group(0))
+                
+                # 括弧内の引数を抽出（ネストした括弧を考慮）
+                args_str, end_pos = self._extract_balanced_parentheses(code, i)
+                
+                if args_str is not None:
+                    # 引数をパース
+                    args = self._parse_macro_arguments(args_str)
+                    
+                    # 引数の数が一致するか確認
+                    if len(args) == len(params):
+                        # マクロを展開
+                        expanded = body
+                        for param, arg in zip(params, args):
+                            # パラメータ名を引数で置換（単語境界を考慮）
+                            param_pattern = r'\b' + re.escape(param) + r'\b'
+                            expanded = re.sub(param_pattern, arg, expanded)
+                        
+                        self.logger.debug(
+                            f"関数マクロ展開: {macro_name}({', '.join(args)}) → {expanded}"
+                        )
+                        
+                        # 展開結果を追加
+                        result.append(expanded)
+                        i = end_pos + 1  # 閉じ括弧の次へ
+                    else:
+                        # 引数数不一致 - 展開しない
+                        self.logger.warning(
+                            f"関数マクロ {macro_name} の引数数が一致しません: "
+                            f"期待={len(params)}, 実際={len(args)}"
+                        )
+                        result.append(code[start:end_pos + 1])
+                        i = end_pos + 1
+                else:
+                    # 括弧が閉じていない - 展開しない
+                    result.append(code[start:i])
+            else:
+                # マクロではない - そのまま追加
+                result.append(code[i])
+                i += 1
+        
+        return ''.join(result)
+    
+    def _extract_balanced_parentheses(self, code: str, start: int) -> Tuple[str, int]:
+        """
+        括弧のバランスを考慮して括弧内の内容を抽出
+        
+        Args:
+            code: ソースコード
+            start: 開始位置（開き括弧の次の位置）
+        
+        Returns:
+            (括弧内の内容, 閉じ括弧の位置) または (None, -1)
+        """
+        depth = 1
+        i = start
+        content_start = start
+        
+        while i < len(code) and depth > 0:
+            char = code[i]
+            
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    # 対応する閉じ括弧を見つけた
+                    return code[content_start:i], i
+            
+            i += 1
+        
+        # 括弧が閉じていない
+        return None, -1
+    
+    def _build_function_macro_pattern(self, macro_name: str) -> str:
+        """
+        関数マクロ呼び出しの正規表現パターンを構築
+        
+        Args:
+            macro_name: マクロ名
+        
+        Returns:
+            正規表現パターン
+        """
+        # MACRO(...)の形式を検出
+        # より柔軟なパターンでネストした括弧も考慮
+        return r'\b' + re.escape(macro_name) + r'\s*\('
+    
+    def _parse_macro_arguments(self, args_str: str) -> List[str]:
+        """
+        マクロ引数文字列をパースして引数リストに分割
+        
+        Args:
+            args_str: 引数文字列（例: "a, b, c"）
+        
+        Returns:
+            引数リスト
+        """
+        args = []
+        current_arg = []
+        paren_depth = 0
+        
+        for char in args_str:
+            if char == '(':
+                paren_depth += 1
+                current_arg.append(char)
+            elif char == ')':
+                paren_depth -= 1
+                current_arg.append(char)
+            elif char == ',' and paren_depth == 0:
+                # トップレベルのカンマで分割
+                args.append(''.join(current_arg).strip())
+                current_arg = []
+            else:
+                current_arg.append(char)
+        
+        # 最後の引数を追加
+        if current_arg or args_str.strip():
+            args.append(''.join(current_arg).strip())
+        
+        return args
     
     def _expand_macros(self, code: str) -> str:
         """
