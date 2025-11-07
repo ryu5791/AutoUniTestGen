@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """
-C言語単体テスト自動生成ツール - CLIインターフェース
+C言語単体テスト自動生成ツール - CLIインターフェース (Phase 7 Enhanced)
 
 コマンドライン引数を処理してテスト生成を実行
+Phase 7の新機能:
+- エラーハンドリング強化
+- バッチ処理
+- パフォーマンス最適化
+- テンプレート機能
 """
 
 import argparse
@@ -11,9 +16,16 @@ from pathlib import Path
 
 from .c_test_auto_generator import CTestAutoGenerator
 from .config import ConfigManager
+from .error_handler import ErrorHandler, ErrorLevel, get_error_handler
+from .batch_processor import BatchProcessor
+from .performance import (
+    PerformanceMonitor, MemoryMonitor, ResultCache,
+    get_performance_monitor, get_memory_monitor, get_result_cache
+)
+from .template_engine import TemplateEngine, create_template_files
 
 
-VERSION = "1.0.0"
+VERSION = "1.0.0-phase7"
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -38,27 +50,40 @@ def create_parser() -> argparse.ArgumentParser:
 
   # 設定ファイルを使用
   %(prog)s -i sample.c -f calculate -c config.json
+  
+  # バッチ処理
+  %(prog)s --batch batch_config.json
+  
+  # バッチ処理（並列実行）
+  %(prog)s --batch batch_config.json --parallel --workers 4
+  
+  # ディレクトリ一括処理
+  %(prog)s --batch-dir src/ --pattern "*.c"
+  
+  # カスタムテンプレート使用
+  %(prog)s -i sample.c -f calc --template my_template
+  
+  # パフォーマンス監視
+  %(prog)s -i sample.c -f calc --performance
 
   # バージョン表示
   %(prog)s --version
         """
     )
     
-    # 必須引数
+    # 必須引数（バッチモード以外）
     parser.add_argument(
         '-i', '--input',
         type=str,
-        required=True,
         metavar='FILE',
-        help='入力するC言語ソースファイルパス (必須)'
+        help='入力するC言語ソースファイルパス'
     )
     
     parser.add_argument(
         '-f', '--function',
         type=str,
-        required=True,
         metavar='FUNC',
-        help='テスト対象関数名 (必須)'
+        help='テスト対象関数名'
     )
     
     # オプション引数
@@ -119,6 +144,125 @@ def create_parser() -> argparse.ArgumentParser:
         help='I/O表のみ生成'
     )
     
+    # Phase 7: バッチ処理オプション
+    batch_group = parser.add_argument_group('バッチ処理オプション')
+    batch_group.add_argument(
+        '--batch',
+        type=str,
+        metavar='FILE',
+        help='バッチ設定ファイル (JSON形式)'
+    )
+    
+    batch_group.add_argument(
+        '--batch-dir',
+        type=str,
+        metavar='DIR',
+        help='ディレクトリ内のすべてのファイルをバッチ処理'
+    )
+    
+    batch_group.add_argument(
+        '--pattern',
+        type=str,
+        default='*.c',
+        metavar='PATTERN',
+        help='バッチディレクトリのファイルパターン (デフォルト: *.c)'
+    )
+    
+    batch_group.add_argument(
+        '--parallel',
+        action='store_true',
+        help='バッチ処理を並列実行'
+    )
+    
+    batch_group.add_argument(
+        '--workers',
+        type=int,
+        default=4,
+        metavar='N',
+        help='並列処理のワーカー数 (デフォルト: 4)'
+    )
+    
+    batch_group.add_argument(
+        '--continue-on-error',
+        action='store_true',
+        help='エラーが発生しても処理を継続'
+    )
+    
+    batch_group.add_argument(
+        '--save-results',
+        type=str,
+        metavar='FILE',
+        help='バッチ処理結果をJSONファイルに保存'
+    )
+    
+    # Phase 7: パフォーマンスオプション
+    perf_group = parser.add_argument_group('パフォーマンスオプション')
+    perf_group.add_argument(
+        '--performance',
+        action='store_true',
+        help='パフォーマンス監視を有効化'
+    )
+    
+    perf_group.add_argument(
+        '--no-cache',
+        action='store_true',
+        help='結果キャッシュを無効化'
+    )
+    
+    perf_group.add_argument(
+        '--memory-limit',
+        type=int,
+        default=1000,
+        metavar='MB',
+        help='メモリ使用量の制限 (MB, デフォルト: 1000)'
+    )
+    
+    # Phase 7: ログオプション
+    log_group = parser.add_argument_group('ログオプション')
+    log_group.add_argument(
+        '--log-level',
+        type=str,
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        default='INFO',
+        help='ログレベル (デフォルト: INFO)'
+    )
+    
+    log_group.add_argument(
+        '--log-file',
+        type=str,
+        metavar='FILE',
+        help='ログファイルパス'
+    )
+    
+    # Phase 7: テンプレートオプション
+    template_group = parser.add_argument_group('テンプレートオプション')
+    template_group.add_argument(
+        '--template',
+        type=str,
+        metavar='NAME',
+        help='使用するテンプレート名'
+    )
+    
+    template_group.add_argument(
+        '--template-dir',
+        type=str,
+        metavar='DIR',
+        help='テンプレートディレクトリ'
+    )
+    
+    template_group.add_argument(
+        '--list-templates',
+        action='store_true',
+        help='利用可能なテンプレートを表示'
+    )
+    
+    template_group.add_argument(
+        '--create-templates',
+        type=str,
+        metavar='DIR',
+        help='サンプルテンプレートファイルを作成'
+    )
+    
     # その他
     parser.add_argument(
         '--version',
@@ -139,6 +283,13 @@ def create_parser() -> argparse.ArgumentParser:
         help='デフォルト設定ファイルを作成して終了'
     )
     
+    parser.add_argument(
+        '--create-batch-config',
+        type=str,
+        metavar='FILE',
+        help='バッチ設定ファイルのテンプレートを作成して終了'
+    )
+    
     return parser
 
 
@@ -152,6 +303,28 @@ def validate_args(args: argparse.Namespace) -> bool:
     Returns:
         bool: 検証成功したかどうか
     """
+    # バッチモードの場合は異なる検証
+    if args.batch or args.batch_dir:
+        if args.batch:
+            batch_path = Path(args.batch)
+            if not batch_path.exists():
+                print(f"❌ エラー: バッチ設定ファイルが見つかりません: {args.batch}", file=sys.stderr)
+                return False
+        
+        if args.batch_dir:
+            dir_path = Path(args.batch_dir)
+            if not dir_path.exists() or not dir_path.is_dir():
+                print(f"❌ エラー: バッチディレクトリが見つかりません: {args.batch_dir}", file=sys.stderr)
+                return False
+        
+        return True
+    
+    # 通常モードの検証
+    if not args.input or not args.function:
+        print("❌ エラー: -i (--input) と -f (--function) は必須です", file=sys.stderr)
+        print("ヘルプを表示: python main.py --help", file=sys.stderr)
+        return False
+    
     # 入力ファイルの存在確認
     input_path = Path(args.input)
     if not input_path.exists():
@@ -186,6 +359,44 @@ def main():
         success = ConfigManager.create_default_config(args.create_config)
         sys.exit(0 if success else 1)
     
+    # バッチ設定ファイル作成モード
+    if args.create_batch_config:
+        from .batch_processor import BatchProcessor
+        BatchProcessor.create_batch_config_template(args.create_batch_config)
+        sys.exit(0)
+    
+    # テンプレートファイル作成モード
+    if args.create_templates:
+        create_template_files(args.create_templates)
+        sys.exit(0)
+    
+    # エラーハンドラーの初期化
+    log_level = ErrorLevel[args.log_level] if hasattr(args, 'log_level') else ErrorLevel.INFO
+    error_handler = ErrorHandler(log_level=log_level, log_file=args.log_file if hasattr(args, 'log_file') else None)
+    
+    # パフォーマンスモニターの初期化（オプション）
+    perf_monitor = None
+    mem_monitor = None
+    result_cache = None
+    
+    if args.performance:
+        perf_monitor = get_performance_monitor()
+        mem_monitor = get_memory_monitor()
+        error_handler.info("パフォーマンス監視を有効化しました")
+    
+    # キャッシュの初期化
+    if not args.no_cache:
+        result_cache = get_result_cache()
+        error_handler.info("結果キャッシュを有効化しました")
+    
+    # テンプレート一覧表示モード
+    if args.list_templates:
+        template_engine = TemplateEngine(template_dir=args.template_dir if hasattr(args, 'template_dir') else None)
+        print("\n利用可能なテンプレート:")
+        for template_name in template_engine.list_templates():
+            print(f"  - {template_name}")
+        sys.exit(0)
+    
     # 引数検証
     if not validate_args(args):
         sys.exit(1)
@@ -203,7 +414,57 @@ def main():
     # 生成器初期化
     generator = CTestAutoGenerator(config=config.to_dict())
     
+    # パフォーマンス監視を生成器に設定
+    if perf_monitor:
+        generator.performance_monitor = perf_monitor
+    if mem_monitor:
+        generator.memory_monitor = mem_monitor
+    if result_cache:
+        generator.result_cache = result_cache
+    
     try:
+        # バッチ処理モード
+        if args.batch or args.batch_dir:
+            error_handler.info("バッチ処理モードで実行します")
+            
+            batch_processor = BatchProcessor(
+                generator=generator,
+                error_handler=error_handler,
+                max_workers=args.workers,
+                continue_on_error=args.continue_on_error
+            )
+            
+            if args.batch:
+                # バッチ設定ファイルから処理
+                items = batch_processor.load_batch_config(args.batch)
+                results = batch_processor.process_batch(items, parallel=args.parallel)
+            else:
+                # ディレクトリを一括処理
+                results = batch_processor.process_directory(
+                    directory=args.batch_dir,
+                    pattern=args.pattern,
+                    output_base_dir=args.output,
+                    parallel=args.parallel
+                )
+            
+            # 結果を保存
+            if args.save_results:
+                batch_processor.save_results(args.save_results)
+            
+            # パフォーマンスメトリクスを表示
+            if perf_monitor:
+                perf_monitor.print_summary()
+            if mem_monitor:
+                mem_monitor.print_memory_status()
+            
+            success = all(r.success for r in results)
+            sys.exit(0 if success else 1)
+        
+        # 通常モード（単一ファイル処理）
+        # 入力ファイルの検証
+        error_handler.validate_input_file(args.input)
+        error_handler.validate_output_dir(args.output)
+        
         # 生成モード判定と実行
         if args.truth_only:
             # 真偽表のみ
@@ -253,6 +514,16 @@ def main():
         print(result)
         print("=" * 70)
         
+        # パフォーマンスメトリクスを表示
+        if perf_monitor:
+            perf_monitor.print_summary()
+        if mem_monitor:
+            mem_monitor.print_memory_status()
+        
+        # エラーサマリーを表示
+        if error_handler.error_history:
+            print(error_handler.get_error_summary())
+        
         sys.exit(0 if result.success else 1)
         
     except KeyboardInterrupt:
@@ -260,10 +531,36 @@ def main():
         sys.exit(130)
     
     except Exception as e:
-        print(f"\n❌ 予期しないエラーが発生しました: {e}", file=sys.stderr)
+        error_handler.error(f"予期しないエラーが発生しました: {str(e)}")
+        
+        # エラーコンテキストを作成
+        from .error_handler import ErrorContext, ErrorCode, GeneratorError
+        
+        if isinstance(e, GeneratorError):
+            print(f"\n{e}", file=sys.stderr)
+        else:
+            context = ErrorContext(
+                file_path=args.input if hasattr(args, 'input') and args.input else None,
+                function_name=args.function if hasattr(args, 'function') and args.function else None,
+                operation="main"
+            )
+            
+            gen_error = GeneratorError(
+                message=str(e),
+                error_code=ErrorCode.UNKNOWN_ERROR,
+                context=context,
+                original_error=e
+            )
+            print(f"\n{gen_error}", file=sys.stderr)
+        
         if args.verbose:
             import traceback
             traceback.print_exc()
+        
+        # エラーサマリーを表示
+        if error_handler.error_history:
+            print(error_handler.get_error_summary())
+        
         sys.exit(1)
 
 

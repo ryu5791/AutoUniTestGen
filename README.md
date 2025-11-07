@@ -1,4 +1,4 @@
-# C言語単体テスト自動生成ツール
+# C言語単体テスト自動生成ツール (Phase 7完了版)
 
 C言語ソースコードから以下を**自動生成**するツール：
 
@@ -8,6 +8,7 @@ C言語ソースコードから以下を**自動生成**するツール：
 
 ## 🎯 主な機能
 
+### 基本機能
 - **MC/DCカバレッジ**: Modified Condition/Decision Coverage を満たすテストケースを自動生成
 - **Unity対応**: Unity Test Framework用のテストコードを生成
 - **モック/スタブ**: 外部関数呼び出しのモック/スタブを自動生成
@@ -15,12 +16,20 @@ C言語ソースコードから以下を**自動生成**するツール：
 - **詳細コメント**: テストケース毎に説明コメントを付与
 - **Excel出力**: 真偽表とI/O表を見やすいExcel形式で出力
 
+### Phase 7の新機能 🆕
+- **エラーハンドリング強化**: 詳細なエラーメッセージとリカバリーヒント
+- **バッチ処理**: 複数ファイルの一括処理、並列実行対応
+- **パフォーマンス最適化**: パフォーマンス監視、メモリ管理、結果キャッシュ
+- **カスタムテンプレート**: テストコードのテンプレートをカスタマイズ可能
+- **拡張CLI**: 20種類以上の新しいコマンドラインオプション
+
 ## 📋 必要要件
 
 - Python 3.8以上
 - 以下のPythonパッケージ：
   - pycparser (C言語パーサー)
   - openpyxl (Excel操作)
+  - psutil (パフォーマンス監視)
 
 ## 🔧 インストール
 
@@ -34,7 +43,7 @@ cd AutoUniTestGen
 ### 2. 依存パッケージをインストール
 
 ```bash
-pip install pycparser openpyxl
+pip install pycparser openpyxl psutil
 ```
 
 または
@@ -89,6 +98,87 @@ python main.py --help
 python main.py --version
 ```
 
+### Phase 7の新機能の使い方 🆕
+
+#### バッチ処理
+
+```bash
+# バッチ設定ファイルを作成
+python main.py --create-batch-config batch_config.json
+
+# バッチ処理を実行
+python main.py --batch batch_config.json
+
+# 並列処理（4ワーカー）
+python main.py --batch batch_config.json --parallel --workers 4
+
+# ディレクトリ一括処理
+python main.py --batch-dir src/ --pattern "*.c"
+
+# 結果をJSON保存
+python main.py --batch batch_config.json --save-results results.json
+
+# エラーが発生しても継続
+python main.py --batch batch_config.json --continue-on-error
+```
+
+**バッチ設定ファイルの例** (`batch_config.json`):
+```json
+{
+  "items": [
+    {
+      "input_file": "sample1.c",
+      "function_name": "function1",
+      "output_dir": "output/sample1"
+    },
+    {
+      "input_file": "sample2.c",
+      "function_name": "function2",
+      "output_dir": "output/sample2"
+    }
+  ]
+}
+```
+
+#### パフォーマンス監視
+
+```bash
+# パフォーマンス監視を有効化
+python main.py -i sample.c -f calculate --performance
+
+# メモリ制限を設定（MB単位）
+python main.py -i sample.c -f calculate --memory-limit 500
+
+# キャッシュを無効化
+python main.py -i sample.c -f calculate --no-cache
+```
+
+#### ログ制御
+
+```bash
+# ログレベルを設定
+python main.py -i sample.c -f calculate --log-level DEBUG
+
+# ログをファイルに出力
+python main.py -i sample.c -f calculate --log-file output.log
+
+# 詳細な出力
+python main.py -i sample.c -f calculate --verbose
+```
+
+#### カスタムテンプレート
+
+```bash
+# サンプルテンプレートファイルを作成
+python main.py --create-templates templates/
+
+# 利用可能なテンプレートを表示
+python main.py --list-templates
+
+# カスタムテンプレートを使用
+python main.py -i sample.c -f calculate --template my_template
+```
+
 ### Pythonスクリプトから使用
 
 ```python
@@ -127,8 +217,12 @@ AutoUniTestGen/
 │   ├── data_structures.py       # データクラス定義
 │   ├── utils.py                 # ユーティリティ関数
 │   ├── config.py                # 設定管理
-│   ├── cli.py                   # CLIインターフェース
+│   ├── cli.py                   # CLIインターフェース (Phase 7拡張)
 │   ├── c_test_auto_generator.py # 統合クラス
+│   ├── error_handler.py         # エラーハンドリング (Phase 7)
+│   ├── batch_processor.py       # バッチ処理 (Phase 7)
+│   ├── performance.py           # パフォーマンス最適化 (Phase 7)
+│   ├── template_engine.py       # テンプレートエンジン (Phase 7)
 │   ├── parser/                  # C言語解析
 │   │   ├── preprocessor.py
 │   │   ├── ast_builder.py
