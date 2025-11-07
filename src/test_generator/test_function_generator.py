@@ -61,7 +61,19 @@ class TestFunctionGenerator:
         
         # 対象関数呼び出し
         lines.append(f"    // 対象関数を実行")
-        lines.append(f"    {parsed_data.function_name}();")
+        
+        # 戻り値がある場合は result 変数に代入
+        if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
+            # パラメータを構築
+            params = []
+            if parsed_data.function_info.parameters:
+                for param in parsed_data.function_info.parameters:
+                    params.append(param.get('name', ''))
+            param_str = ', '.join(params) if params else ''
+            lines.append(f"    result = {parsed_data.function_name}({param_str});")
+        else:
+            lines.append(f"    {parsed_data.function_name}();")
+        
         lines.append("")
         
         # アサーション
@@ -188,6 +200,34 @@ class TestFunctionGenerator:
         lines = []
         lines.append("    // 変数を初期化")
         
+        # 戻り値がある場合は result 変数を初期化
+        if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
+            return_type = parsed_data.function_info.return_type
+            # ポインタ型の場合は NULL、それ以外は 0
+            if '*' in return_type:
+                lines.append("    result = NULL;")
+            else:
+                lines.append("    result = 0;")
+        
+        # パラメータの初期化
+        if parsed_data.function_info and parsed_data.function_info.parameters:
+            for param in parsed_data.function_info.parameters:
+                param_name = param.get('name', '')
+                param_type = param.get('type', 'int')
+                
+                # input_values から値を取得
+                if hasattr(test_case, 'input_values') and test_case.input_values:
+                    if param_name in test_case.input_values:
+                        value = test_case.input_values[param_name]
+                        lines.append(f"    {param_name} = {value};")
+                        continue
+                
+                # デフォルト値を設定
+                if '*' in param_type:
+                    lines.append(f"    {param_name} = NULL;")
+                else:
+                    lines.append(f"    {param_name} = 0;")
+        
         # 対応する条件を検索
         matching_condition = None
         for cond in parsed_data.conditions:
@@ -196,7 +236,6 @@ class TestFunctionGenerator:
                 break
         
         if not matching_condition:
-            lines.append("    // TODO: 変数を初期化")
             lines.append("")
             return '\n'.join(lines)
         
@@ -365,13 +404,117 @@ class TestFunctionGenerator:
         lines = []
         lines.append("    // モックを設定")
         
+        if not parsed_data.external_functions:
+            lines.append("")
+            return '\n'.join(lines)
+        
         # 外部関数のモック戻り値を設定
-        # TODO: 実際の値は条件に応じて決定
         for func_name in parsed_data.external_functions:
-            lines.append(f"    mock_{func_name}_return_value = 0;  // TODO: 適切な値を設定")
+            # 戻り値を決定
+            return_value = self._determine_mock_return_value(
+                func_name, test_case, parsed_data
+            )
+            lines.append(f"    mock_{func_name}_return_value = {return_value};")
+            lines.append(f"    mock_{func_name}_call_count = 0;")
         
         lines.append("")
         return '\n'.join(lines)
+    
+    def _determine_mock_return_value(self, func_name: str, test_case: TestCase, 
+                                      parsed_data: ParsedData) -> str:
+        """
+        モック関数の戻り値を決定
+        
+        ロジック:
+        1. 条件式に関数が含まれているか確認
+        2. 含まれている場合、真偽パターンに応じて値を決定
+           - 例: func() > 10 で T の場合 → 11
+           - 例: func() > 10 で F の場合 → 10
+        3. 含まれていない場合 → デフォルト値（0）
+        
+        Args:
+            func_name: モック関数名
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            決定した戻り値（文字列）
+        """
+        # デフォルト値
+        default_value = "0"
+        
+        # テストケースの条件を確認
+        condition_expr = test_case.condition
+        truth_value = test_case.truth
+        
+        if not condition_expr or func_name not in condition_expr:
+            return default_value
+        
+        # 条件式を解析して適切な値を決定
+        # パターン1: func() > N または func() >= N
+        match = re.search(rf'{func_name}\s*\(\)\s*(>=?)\s*(\d+)', condition_expr)
+        if match:
+            operator = match.group(1)
+            threshold = int(match.group(2))
+            
+            if truth_value == 'T':
+                # 真の場合: 閾値より大きい値
+                if operator == '>':
+                    return str(threshold + 1)
+                else:  # >=
+                    return str(threshold)
+            else:
+                # 偽の場合: 閾値以下の値
+                if operator == '>':
+                    return str(threshold)
+                else:  # >=
+                    return str(threshold - 1)
+        
+        # パターン2: func() < N または func() <= N
+        match = re.search(rf'{func_name}\s*\(\)\s*(<=?)\s*(\d+)', condition_expr)
+        if match:
+            operator = match.group(1)
+            threshold = int(match.group(2))
+            
+            if truth_value == 'T':
+                # 真の場合: 閾値より小さい値
+                if operator == '<':
+                    return str(threshold - 1)
+                else:  # <=
+                    return str(threshold)
+            else:
+                # 偽の場合: 閾値以上の値
+                if operator == '<':
+                    return str(threshold)
+                else:  # <=
+                    return str(threshold + 1)
+        
+        # パターン3: func() == N
+        match = re.search(rf'{func_name}\s*\(\)\s*==\s*(\d+)', condition_expr)
+        if match:
+            value = int(match.group(1))
+            if truth_value == 'T':
+                return str(value)
+            else:
+                return str(value + 1)
+        
+        # パターン4: func() != N
+        match = re.search(rf'{func_name}\s*\(\)\s*!=\s*(\d+)', condition_expr)
+        if match:
+            value = int(match.group(1))
+            if truth_value == 'T':
+                return str(value + 1)
+            else:
+                return str(value)
+        
+        # パターン5: 単純な関数呼び出し（真偽値として使用）
+        if re.search(rf'{func_name}\s*\(\)', condition_expr):
+            if truth_value == 'T':
+                return "1"  # 真
+            else:
+                return "0"  # 偽
+        
+        return default_value
     
     def _generate_assertions(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """
@@ -387,12 +530,110 @@ class TestFunctionGenerator:
         lines = []
         lines.append("    // 結果を確認")
         
-        # グローバル変数の確認
-        for var in parsed_data.global_variables[:3]:  # 最初の3つ
-            lines.append(f"    TEST_ASSERT_EQUAL(/* 期待値 */, {var});")
+        # 戻り値のチェック（void以外の場合）
+        if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
+            expected_value = self._calculate_expected_return_value(test_case, parsed_data)
+            if expected_value is not None:
+                lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, result);")
         
-        lines.append("")
+        # グローバル変数のチェック
+        for var in parsed_data.global_variables[:3]:  # 最初の3つ
+            if not self._is_function_or_enum(var, parsed_data):
+                expected_value = self._calculate_expected_variable_value(
+                    var, test_case, parsed_data
+                )
+                if expected_value is not None:
+                    lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, {var});")
+        
+        # アサーションが1つもない場合は空行のみ
+        if len(lines) == 1:
+            lines.append("")
+        else:
+            lines.append("")
+        
         return '\n'.join(lines)
+    
+    def _calculate_expected_return_value(self, test_case: TestCase, 
+                                          parsed_data: ParsedData) -> Optional[str]:
+        """
+        戻り値の期待値を計算
+        
+        簡易実装:
+        - 真の分岐 → 1 または定数値
+        - 偽の分岐 → 0 または別の定数値
+        - より高度な実装は将来のPhaseで
+        
+        Args:
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            期待値（文字列）またはNone
+        """
+        # input_values と output_values から期待値を取得
+        if hasattr(test_case, 'output_values') and test_case.output_values:
+            # return value は 'result' というキーで格納されていることを想定
+            if 'result' in test_case.output_values:
+                return str(test_case.output_values['result'])
+        
+        # デフォルトの簡易計算
+        # 真の分岐の場合は1、偽の分岐の場合は0を返す
+        if test_case.truth == 'T':
+            return "1"
+        else:
+            return "0"
+    
+    def _calculate_expected_variable_value(self, var: str, test_case: TestCase,
+                                            parsed_data: ParsedData) -> Optional[str]:
+        """
+        変数の期待値を計算
+        
+        Args:
+            var: 変数名
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            期待値（文字列）またはNone
+        """
+        # output_values から期待値を取得
+        if hasattr(test_case, 'output_values') and test_case.output_values:
+            if var in test_case.output_values:
+                return str(test_case.output_values[var])
+        
+        # input_valuesに変数がある場合、その値が変更されていない可能性がある
+        if hasattr(test_case, 'input_values') and test_case.input_values:
+            if var in test_case.input_values:
+                # 入力値がそのまま出力される可能性がある場合
+                return str(test_case.input_values[var])
+        
+        # 期待値が計算できない場合はNoneを返す
+        return None
+    
+    def _is_function_or_enum(self, identifier: str, parsed_data: ParsedData) -> bool:
+        """
+        識別子が関数またはenum定数かどうかを判定
+        
+        Args:
+            identifier: 識別子
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            関数またはenum定数の場合True
+        """
+        # 関数名のチェック
+        if identifier in parsed_data.external_functions:
+            return True
+        
+        # 対象関数自身のチェック
+        if identifier == parsed_data.function_name:
+            return True
+        
+        # enum定数のチェック
+        if identifier in parsed_data.enum_values:
+            return True
+        
+        return False
     
     def _generate_call_count_check(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """

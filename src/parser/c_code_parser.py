@@ -67,7 +67,9 @@ class CCodeParser:
             conditions = extractor.extract_conditions(ast)
             
             # 6. 外部関数を抽出
-            external_functions = self._extract_external_functions(conditions)
+            external_functions = self._extract_external_functions(
+                conditions, ast, target_function or (function_info.name if function_info else None)
+            )
             
             # 7. グローバル変数を抽出
             global_variables = self._extract_global_variables(ast)
@@ -125,6 +127,21 @@ class CCodeParser:
                         type_node = node.decl.type.type
                         if hasattr(type_node, 'names'):
                             return_type = ' '.join(type_node.names)
+                        elif hasattr(type_node, 'type') and hasattr(type_node.type, 'names'):
+                            # ポインタ型などの場合
+                            return_type = ' '.join(type_node.type.names)
+                            if hasattr(type_node, 'quals') and type_node.quals:
+                                return_type = ' '.join(type_node.quals) + ' ' + return_type
+                            # ポインタの数を追加
+                            ptr_count = 0
+                            temp = type_node
+                            while hasattr(temp, 'type'):
+                                if temp.__class__.__name__ == 'PtrDecl':
+                                    ptr_count += 1
+                                temp = temp.type if hasattr(temp, 'type') else None
+                                if temp is None:
+                                    break
+                            return_type += '*' * ptr_count
                     
                     # パラメータを取得
                     parameters = []
@@ -132,6 +149,9 @@ class CCodeParser:
                         for param in node.decl.type.args.params:
                             if hasattr(param, 'name') and param.name:
                                 param_type = "int"  # 簡易実装
+                                if hasattr(param, 'type'):
+                                    if hasattr(param.type, 'type') and hasattr(param.type.type, 'names'):
+                                        param_type = ' '.join(param.type.type.names)
                                 parameters.append({
                                     'name': param.name,
                                     'type': param_type
@@ -152,28 +172,56 @@ class CCodeParser:
         
         return visitor.func_info
     
-    def _extract_external_functions(self, conditions) -> list:
+    def _extract_external_functions(self, conditions, ast, target_function: Optional[str] = None) -> list:
         """
-        条件分岐から外部関数を抽出
+        外部関数を抽出（条件式と関数本体の両方から）
         
         Args:
             conditions: 条件分岐リスト
+            ast: AST
+            target_function: 対象関数名
         
         Returns:
             外部関数名のリスト
         """
         from src.utils import extract_all_function_names
+        from pycparser import c_ast
         
         functions = set()
         
+        # 1. 条件式から関数名を抽出
         for cond in conditions:
-            # 条件式から関数名を抽出
             func_names = extract_all_function_names(cond.expression)
             functions.update(func_names)
         
-        # 一般的なC言語キーワードを除外
+        # 2. 関数本体から関数呼び出しを抽出
+        class FunctionCallVisitor(c_ast.NodeVisitor):
+            def __init__(self, target):
+                self.target = target
+                self.in_target_function = False
+                self.function_calls = set()
+            
+            def visit_FuncDef(self, node):
+                func_name = node.decl.name
+                if self.target is None or func_name == self.target:
+                    self.in_target_function = True
+                    self.generic_visit(node)
+                    self.in_target_function = False
+            
+            def visit_FuncCall(self, node):
+                if self.in_target_function and hasattr(node.name, 'name'):
+                    self.function_calls.add(node.name.name)
+                self.generic_visit(node)
+        
+        visitor = FunctionCallVisitor(target_function)
+        visitor.visit(ast)
+        functions.update(visitor.function_calls)
+        
+        # 一般的なC言語キーワードと対象関数自身を除外
         keywords = {'if', 'else', 'switch', 'case', 'default', 'for', 'while', 'do', 'return'}
         functions = functions - keywords
+        if target_function:
+            functions.discard(target_function)
         
         return sorted(list(functions))
     
