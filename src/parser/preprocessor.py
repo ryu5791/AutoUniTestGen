@@ -260,6 +260,15 @@ class Preprocessor:
                 params_str = func_macro_match.group(2).strip()
                 macro_body = func_macro_match.group(3).strip()
                 
+                # マクロ本体からコメントを削除
+                # C++スタイルコメント (//) を削除
+                cpp_comment_pos = macro_body.find('//')
+                if cpp_comment_pos != -1:
+                    macro_body = macro_body[:cpp_comment_pos].strip()
+                
+                # Cスタイルコメント (/* */) を削除
+                macro_body = re.sub(r'/\*.*?\*/', '', macro_body).strip()
+                
                 # パラメータをリストに分割
                 params = [p.strip() for p in params_str.split(',') if p.strip()]
                 
@@ -281,6 +290,15 @@ class Preprocessor:
             if define_match:
                 macro_name = define_match.group(1)
                 macro_value = define_match.group(2).strip() if define_match.group(2) else '1'
+                
+                # マクロ値からコメントを削除
+                # C++スタイルコメント (//) を削除
+                cpp_comment_pos = macro_value.find('//')
+                if cpp_comment_pos != -1:
+                    macro_value = macro_value[:cpp_comment_pos].strip()
+                
+                # Cスタイルコメント (/* */) を削除
+                macro_value = re.sub(r'/\*.*?\*/', '', macro_value).strip()
                 
                 # 外部から定義されていない場合のみ、コード内の定義を使用
                 if macro_name not in self.defines:
