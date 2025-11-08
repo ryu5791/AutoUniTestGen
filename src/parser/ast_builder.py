@@ -74,32 +74,83 @@ class ASTBuilder:
     
     def _add_fake_includes(self, code: str) -> str:
         """
-        fake_libc_includeを追加または標準型定義を追加
+        標準型定義とマクロを追加
+        
+        外部ファイルから標準型定義を読み込み、コードの先頭に追加する。
+        ファイルが見つからない場合は、埋め込みの定義を使用する。
         
         Args:
             code: ソースコード
         
         Returns:
-            fake_include追加後のコード
+            標準定義追加後のコード
         """
-        # 標準型定義を追加（stdint.h相当）
-        standard_types = """
-typedef unsigned char uint8_t;
-typedef unsigned short uint16_t;
-typedef unsigned int uint32_t;
-typedef unsigned long long uint64_t;
-typedef signed char int8_t;
-typedef signed short int16_t;
-typedef signed int int32_t;
-typedef signed long long int64_t;
-typedef unsigned long size_t;
-typedef long ssize_t;
-typedef int bool;
-
-"""
+        standard_definitions = ""
         
-        # コードの先頭に標準型定義を追加
-        return standard_types + code
+        # 標準定義ファイルのパスを取得
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        
+        # 標準型定義ファイルを読み込み
+        types_file = os.path.join(project_root, 'standard_types.h')
+        macros_file = os.path.join(project_root, 'standard_macros.h')
+        
+        try:
+            if os.path.exists(types_file):
+                with open(types_file, 'r', encoding='utf-8') as f:
+                    standard_definitions += f.read() + "\n\n"
+                self.logger.debug(f"標準型定義を読み込み: {types_file}")
+            else:
+                # ファイルが存在しない場合は埋め込み定義を使用
+                standard_definitions += self._get_embedded_type_definitions() + "\n\n"
+                self.logger.debug("埋め込み標準型定義を使用")
+            
+            if os.path.exists(macros_file):
+                with open(macros_file, 'r', encoding='utf-8') as f:
+                    standard_definitions += f.read() + "\n\n"
+                self.logger.debug(f"標準マクロ定義を読み込み: {macros_file}")
+            else:
+                # ファイルが存在しない場合は埋め込み定義を使用
+                standard_definitions += self._get_embedded_macro_definitions() + "\n\n"
+                self.logger.debug("埋め込み標準マクロ定義を使用")
+                
+        except Exception as e:
+            self.logger.warning(f"標準定義ファイルの読み込みエラー: {e}")
+            # エラー時は埋め込み定義を使用
+            standard_definitions = self._get_embedded_type_definitions() + "\n\n"
+            standard_definitions += self._get_embedded_macro_definitions() + "\n\n"
+        
+        # コードの先頭に標準定義を追加
+        return standard_definitions + code
+    
+    def _get_embedded_type_definitions(self) -> str:
+        """
+        埋め込み型定義を返す（フォールバック用）
+        """
+        return """
+typedef signed char        int8_t;
+typedef short              int16_t;
+typedef int                int32_t;
+typedef long long          int64_t;
+typedef unsigned char      uint8_t;
+typedef unsigned short     uint16_t;
+typedef unsigned int       uint32_t;
+typedef unsigned long long uint64_t;
+typedef unsigned long      size_t;
+typedef long               ssize_t;
+typedef enum { false = 0, true = 1 } bool;
+"""
+    
+    def _get_embedded_macro_definitions(self) -> str:
+        """
+        埋め込みマクロ定義を返す（フォールバック用）
+        """
+        return """
+#define NULL ((void*)0)
+#define INT8_MIN   (-127 - 1)
+#define INT8_MAX   127
+#define UINT8_MAX  0xffU
+"""
     
     def _handle_parse_error(self, error: Exception, code: str = "") -> None:
         """

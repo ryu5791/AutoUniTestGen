@@ -1,41 +1,112 @@
 {
   "presets": {
-    "model_a": {
-      "description": "Aモデル用の設定",
+    "Pro_A_R_N": {
+      "description": "Pro_A_R_N用の設定",
       "defines": {
-        "MODEL_A": "1",
-        "TYPE1": "1",
-        "TYPE2": "1",
-        "MAX_SENSORS": "10",
-        "ENABLE_DEBUG": "1"
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1"
       }
     },
-    "model_b": {
-      "description": "Bモデル用の設定",
+    "Pro_A_R_N250": {
+      "description": "Pro_A_R_N250用の設定",
       "defines": {
-        "MODEL_B": "1",
-        "TYPE1": "1",
-        "TYPE3": "1",
-        "MAX_SENSORS": "8",
-        "ENABLE_LOGGING": "1"
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1"
       }
     },
-    "model_c": {
-      "description": "Cモデル用の設定",
+    "Pro_A_R_N500": {
+      "description": "Pro_A_R_N500用の設定",
       "defines": {
-        "MODEL_C": "1",
-        "TYPE2": "1",
-        "TYPE3": "1",
-        "DEBUG_MODE": "1",
-        "MAX_BUFFER_SIZE": "256"
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1"
       }
     },
-    "production": {
-      "description": "本番環境用の設定",
+    "Pro_A_R_N_EOS": {
+      "description": "Pro_A_R_N_EOS用の設定",
       "defines": {
-        "PRODUCTION": "1",
-        "NDEBUG": "1",
-        "OPTIMIZE_LEVEL": "3"
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1",
+        "EOS_MODEL": "1"
+      }
+    },
+    "Pro_A_R_N_PCE": {
+      "description": "Pro_A_R_N_PCE用の設定",
+      "defines": {
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1",
+        "PCE_MODEL": "1"
+      }
+    },
+    "Pro_A_VH_SW": {
+      "description": "Pro_A_VH_SW用の設定",
+      "defines": {
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1",
+        "VH_COMMON": "1"
+      }
+    },
+    "Pro_A_VM_A": {
+      "description": "Pro_A_VM_A用の設定",
+      "defines": {
+        "_DEBUG_NO_MOTOR": "1",
+        "SET_STRK": "1",
+        "ADL_MASTER": "1",
+        "DISABLE_NET_LOG": "1",
+        "MARKUS": "1",
+        "OVERSHOOT": "1",
+        "BEAM_NEW": "1",
+        "AD_LINK2_P2": "1",
+        "AD_LINK2_P2_SNAP2": "1",
+        "KOKENKYO_CL_FORCE": "1",
+        "VM_A": "1"
       }
     }
   }
