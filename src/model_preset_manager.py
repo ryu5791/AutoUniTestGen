@@ -20,7 +20,13 @@ class ModelPresetManager:
         Args:
             preset_file: プリセットファイルのパス（省略時はデフォルト）
         """
-        self.preset_file = preset_file or "model_presets.json"
+        if preset_file:
+            self.preset_file = preset_file
+        else:
+            # デフォルトはこのスクリプトと同じディレクトリ
+            script_dir = Path(__file__).parent.parent
+            self.preset_file = str(script_dir / "model_presets.json")
+        
         self.presets: Dict[str, Dict] = {}
         self.load_presets()
     
@@ -34,7 +40,7 @@ class ModelPresetManager:
         preset_path = Path(self.preset_file)
         
         if not preset_path.exists():
-            print(f"⚠️ プリセットファイルが見つかりません: {self.preset_file}")
+            print(f"⚠️ プリセットファイルが見つかりません: {preset_path.absolute()}")
             print(f"   デフォルトのプリセットファイルを作成します")
             self.create_default_preset_file()
             # 作成後に再読み込み
@@ -44,9 +50,12 @@ class ModelPresetManager:
             with open(preset_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self.presets = data.get('presets', {})
+            print(f"✅ プリセットファイルを読み込みました: {preset_path.absolute()}")
+            print(f"   読み込んだプリセット数: {len(self.presets)}個")
             return True
         except Exception as e:
             print(f"❌ プリセットファイルの読み込みに失敗: {e}")
+            print(f"   ファイルパス: {preset_path.absolute()}")
             return False
     
     def get_preset(self, preset_name: str) -> Optional[Dict[str, str]]:
@@ -138,9 +147,11 @@ class ModelPresetManager:
         }
         
         try:
-            with open(self.preset_file, 'w', encoding='utf-8') as f:
+            # 絶対パスに変換
+            preset_path = Path(self.preset_file)
+            with open(preset_path, 'w', encoding='utf-8') as f:
                 json.dump(default_presets, f, indent=2, ensure_ascii=False)
-            print(f"✅ デフォルトのプリセットファイルを作成しました: {self.preset_file}")
+            print(f"✅ デフォルトのプリセットファイルを作成しました: {preset_path.absolute()}")
         except Exception as e:
             print(f"❌ プリセットファイルの作成に失敗: {e}")
 
@@ -155,7 +166,7 @@ if __name__ == "__main__":
         manager.list_presets()
     else:
         # model_aのプリセットを取得
-        defines = manager.get_preset("model_a")
+        defines = manager.get_preset("Pro_A_R_N")
         if defines:
             print("\nmodel_aのマクロ定義:")
             for name, value in defines.items():
