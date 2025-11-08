@@ -119,9 +119,12 @@ class Preprocessor:
         ビット幅指定（: N）をコメント化する。ただし、ビットフィールド情報は
         別途保持し、テスト生成時に活用する。
         
+        また、無名ビットフィールド（例: uint16_t : 13;）に自動的に名前を付ける。
+        
         例:
             uint16_t internal : 8;  -> uint16_t internal /* : 8 */;
             uint8_t ram : 1;        -> uint8_t ram /* : 1 */;
+            uint16_t : 13;          -> uint16_t reserved_0 /* : 13 */;
         
         Args:
             code: ソースコード
@@ -129,13 +132,16 @@ class Preprocessor:
         Returns:
             ビットフィールド削除後のコード
         """
-        # ビットフィールド情報を抽出する拡張パターン
-        # 型 変数名 : ビット幅 ;
-        pattern = r'((?:uint\d+_t|int\d+_t|unsigned\s+\w+|signed\s+\w+|\w+))\s+(\w+)\s*:\s*(\d+)\s*;'
+        # 名前付きビットフィールドパターン: 型 変数名 : ビット幅 ;
+        named_pattern = r'((?:uint\d+_t|int\d+_t|unsigned\s+\w+|signed\s+\w+|\w+))\s+(\w+)\s*:\s*(\d+)\s*;'
+        
+        # 無名ビットフィールドパターン: 型 : ビット幅 ;
+        unnamed_pattern = r'((?:uint\d+_t|int\d+_t|unsigned\s+\w+|signed\s+\w+|\w+))\s*:\s*(\d+)\s*;'
         
         modified_lines = []
         current_struct = None
         struct_stack = []
+        unnamed_counter = 0
         
         for line in code.split('\n'):
             # 構造体/共用体の開始を検出
@@ -155,12 +161,12 @@ class Preprocessor:
                 modified_lines.append(line)
                 continue
             
-            # ビットフィールドを検出
-            match = re.search(pattern, line)
-            if match and current_struct:
-                base_type = match.group(1).strip()
-                member_name = match.group(2)
-                bit_width = int(match.group(3))
+            # 名前付きビットフィールドを検出
+            named_match = re.search(named_pattern, line)
+            if named_match and current_struct:
+                base_type = named_match.group(1).strip()
+                member_name = named_match.group(2)
+                bit_width = int(named_match.group(3))
                 
                 # ビットフィールド情報を保存
                 self.bitfields[member_name] = (current_struct, bit_width, base_type)
@@ -174,6 +180,30 @@ class Preprocessor:
                 modified_lines.append(modified_line)
                 
                 self.logger.debug(f"ビットフィールド検出: {current_struct}.{member_name} : {bit_width} ({base_type})")
+            
+            # 無名ビットフィールドを検出（名前付きにマッチしなかった場合のみ）
+            elif current_struct and re.search(unnamed_pattern, line):
+                unnamed_match = re.search(unnamed_pattern, line)
+                base_type = unnamed_match.group(1).strip()
+                bit_width = int(unnamed_match.group(2))
+                
+                # 自動的に名前を生成
+                reserved_name = f"reserved_{unnamed_counter}"
+                unnamed_counter += 1
+                
+                # ビットフィールド情報を保存
+                self.bitfields[reserved_name] = (current_struct, bit_width, base_type)
+                
+                # 無名ビットフィールドに名前を付けてビット幅をコメント化
+                modified_line = re.sub(
+                    r'(' + re.escape(base_type) + r')\s*:\s*(\d+)\s*;',
+                    r'\1 ' + reserved_name + r' /* : \2 */;',
+                    line
+                )
+                modified_lines.append(modified_line)
+                
+                self.logger.debug(f"無名ビットフィールド検出: {current_struct}.{reserved_name} : {bit_width} ({base_type}) ← 自動命名")
+            
             else:
                 modified_lines.append(line)
         
@@ -183,7 +213,10 @@ class Preprocessor:
         if self.bitfields:
             self.logger.info(f"ビットフィールド情報を {len(self.bitfields)} 個抽出しました")
             for member, (struct, width, btype) in self.bitfields.items():
-                self.logger.debug(f"  {struct}.{member}: {width}ビット ({btype})")
+                if member.startswith('reserved_'):
+                    self.logger.debug(f"  {struct}.{member}: {width}ビット ({btype}) [自動命名]")
+                else:
+                    self.logger.debug(f"  {struct}.{member}: {width}ビット ({btype})")
         
         return modified_code
     

@@ -14,15 +14,35 @@ import argparse
 import sys
 from pathlib import Path
 
-from .c_test_auto_generator import CTestAutoGenerator
-from .config import ConfigManager
-from .error_handler import ErrorHandler, ErrorLevel, get_error_handler
-from .batch_processor import BatchProcessor
-from .performance import (
-    PerformanceMonitor, MemoryMonitor, ResultCache,
-    get_performance_monitor, get_memory_monitor, get_result_cache
-)
-from .template_engine import TemplateEngine, create_template_files
+# 相対importと絶対importの両方に対応
+try:
+    # パッケージとして実行された場合（python -m src.cli）
+    from .c_test_auto_generator import CTestAutoGenerator
+    from .config import ConfigManager
+    from .error_handler import ErrorHandler, ErrorLevel, get_error_handler
+    from .batch_processor import BatchProcessor
+    from .performance import (
+        PerformanceMonitor, MemoryMonitor, ResultCache,
+        get_performance_monitor, get_memory_monitor, get_result_cache
+    )
+    from .template_engine import TemplateEngine, create_template_files
+except ImportError:
+    # 直接実行された場合（python src/cli.py）
+    # srcディレクトリの親をパスに追加
+    import os
+    parent_dir = Path(__file__).resolve().parent.parent
+    if str(parent_dir) not in sys.path:
+        sys.path.insert(0, str(parent_dir))
+    
+    from src.c_test_auto_generator import CTestAutoGenerator
+    from src.config import ConfigManager
+    from src.error_handler import ErrorHandler, ErrorLevel, get_error_handler
+    from src.batch_processor import BatchProcessor
+    from src.performance import (
+        PerformanceMonitor, MemoryMonitor, ResultCache,
+        get_performance_monitor, get_memory_monitor, get_result_cache
+    )
+    from src.template_engine import TemplateEngine, create_template_files
 
 
 VERSION = "1.0.0-phase7"
