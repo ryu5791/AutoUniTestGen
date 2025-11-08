@@ -52,7 +52,7 @@ class GeneratorConfig:
 class ConfigManager:
     """設定管理クラス"""
     
-    DEFAULT_CONFIG_NAME = "generator_config.json"
+    DEFAULT_CONFIG_NAMES = ["generator_config.json", "config.ini", "config.json"]
     
     def __init__(self, config_path: Optional[str] = None):
         """
@@ -64,6 +64,25 @@ class ConfigManager:
         self.config_path = Path(config_path) if config_path else None
         self.config = GeneratorConfig()
     
+    def _find_config_file(self) -> Optional[Path]:
+        """
+        設定ファイルを検索
+        
+        Returns:
+            Path: 見つかった設定ファイルのパス、なければNone
+        """
+        # 明示的に指定されている場合
+        if self.config_path and self.config_path.exists():
+            return self.config_path
+        
+        # デフォルトファイル名を順番に探す
+        for config_name in self.DEFAULT_CONFIG_NAMES:
+            path = Path(config_name)
+            if path.exists():
+                return path
+        
+        return None
+    
     def load(self, config_path: Optional[str] = None) -> GeneratorConfig:
         """
         設定ファイルを読み込む
@@ -74,13 +93,22 @@ class ConfigManager:
         Returns:
             GeneratorConfig: 設定オブジェクト
         """
-        path = Path(config_path) if config_path else self.config_path
+        if config_path:
+            path = Path(config_path)
+        else:
+            path = self._find_config_file()
         
         if path and path.exists():
             try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                self.config = GeneratorConfig.from_dict(data)
+                # ファイル形式に応じて読み込み
+                if path.suffix.lower() == '.ini':
+                    self._load_ini(path)
+                elif path.suffix.lower() == '.json':
+                    self._load_json(path)
+                else:
+                    # 拡張子がない場合はJSONとして試行
+                    self._load_json(path)
+                
                 print(f"✅ 設定ファイルを読み込みました: {path}")
             except Exception as e:
                 print(f"⚠️ 設定ファイルの読み込みに失敗しました: {e}")
@@ -89,6 +117,49 @@ class ConfigManager:
             print(f"ℹ️ 設定ファイルが見つかりません。デフォルト設定を使用します")
         
         return self.config
+    
+    def _load_json(self, path: Path):
+        """JSON形式の設定ファイルを読み込む"""
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        self.config = GeneratorConfig.from_dict(data)
+    
+    def _load_ini(self, path: Path):
+        """INI形式の設定ファイルを読み込む"""
+        import configparser
+        
+        parser = configparser.ConfigParser()
+        parser.read(path, encoding='utf-8')
+        
+        # INIファイルから設定を読み込む
+        config_dict = {}
+        
+        # [output]セクション
+        if parser.has_section('output'):
+            if parser.has_option('output', 'output_dir'):
+                config_dict['output_dir'] = parser.get('output', 'output_dir')
+            if parser.has_option('output', 'truth_table_suffix'):
+                config_dict['truth_table_suffix'] = parser.get('output', 'truth_table_suffix')
+            if parser.has_option('output', 'test_code_prefix'):
+                config_dict['test_code_prefix'] = parser.get('output', 'test_code_prefix')
+            if parser.has_option('output', 'io_table_suffix'):
+                config_dict['io_table_suffix'] = parser.get('output', 'io_table_suffix')
+        
+        # [preprocessing]セクション
+        if parser.has_section('preprocessing'):
+            if parser.has_option('preprocessing', 'include_paths'):
+                paths_str = parser.get('preprocessing', 'include_paths')
+                config_dict['include_paths'] = [p.strip() for p in paths_str.split('\n') if p.strip()]
+        
+        # [test_generation]セクション
+        if parser.has_section('test_generation'):
+            if parser.has_option('test_generation', 'include_mock_stubs'):
+                config_dict['include_mock_stubs'] = parser.getboolean('test_generation', 'include_mock_stubs')
+            if parser.has_option('test_generation', 'include_comments'):
+                config_dict['include_comments'] = parser.getboolean('test_generation', 'include_comments')
+        
+        # 設定を適用
+        self.config = GeneratorConfig(**config_dict)
     
     def save(self, config_path: Optional[str] = None) -> bool:
         """
