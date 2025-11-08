@@ -279,6 +279,8 @@ class TestFunctionGenerator:
         test_value = self.boundary_calc.generate_test_value(condition.expression, truth)
         
         if test_value:
+            # ビットフィールドの場合はマスク処理を追加
+            test_value = self._apply_bitfield_mask(test_value, parsed_data)
             # 生成された初期化コードが関数やenum定数を使っていないか検証
             test_value = self._validate_and_fix_init_code(test_value, parsed_data)
             return test_value
@@ -291,12 +293,58 @@ class TestFunctionGenerator:
             if self._is_function_or_enum(var, parsed_data):
                 return f"// TODO: {var}は関数またはenum定数のため初期化できません"
             
+            # ビットフィールドかチェック
+            if var in parsed_data.bitfields:
+                bitfield = parsed_data.bitfields[var]
+                max_val = bitfield.get_max_value()
+                if truth == 'T':
+                    return f"{var} = 1  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})"
+                else:
+                    return f"{var} = 0  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})"
+            
             if truth == 'T':
                 return f"{var} = 1  // TODO: 真になる値を設定"
             else:
                 return f"{var} = 0  // TODO: 偽になる値を設定"
         
         return None
+    
+    def _apply_bitfield_mask(self, init_code: str, parsed_data: ParsedData) -> str:
+        """
+        ビットフィールドの場合、マスク処理を追加
+        
+        Args:
+            init_code: 初期化コード（例: "internal = 255"）
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            マスク処理を追加した初期化コード
+        """
+        # 初期化コードから変数名と値を抽出
+        match = re.match(r'(\w+)\s*=\s*(\d+)', init_code)
+        if not match:
+            return init_code
+        
+        var_name = match.group(1)
+        value = int(match.group(2))
+        
+        # ビットフィールドかチェック
+        if var_name not in parsed_data.bitfields:
+            return init_code
+        
+        bitfield = parsed_data.bitfields[var_name]
+        max_value = bitfield.get_max_value()
+        
+        # 値がビット幅を超えている場合は警告コメントを追加
+        if value > max_value:
+            masked_value = value & max_value
+            return f"{var_name} = 0x{masked_value:X}  /* 元の値: {value}, {bitfield.bit_width}ビットでマスク */"
+        
+        # 値が範囲内の場合は16進数表記に変換
+        if value > 9:
+            return f"{var_name} = 0x{value:X}  /* {bitfield.bit_width}ビットフィールド */"
+        
+        return f"{var_name} = {value}  /* {bitfield.bit_width}ビットフィールド */"
     
     def _generate_or_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> List[str]:
         """

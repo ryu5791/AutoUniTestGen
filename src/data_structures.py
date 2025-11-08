@@ -142,6 +142,33 @@ class MockFunction:
 
 
 @dataclass
+class BitFieldInfo:
+    """ビットフィールド情報"""
+    struct_name: str  # 構造体/共用体名
+    member_name: str  # メンバー名
+    bit_width: int    # ビット幅
+    base_type: str    # 基本型（uint8_t, uint16_tなど）
+    full_path: str    # フルパス（例: mAdge.category.internal）
+    
+    def get_max_value(self) -> int:
+        """ビットフィールドの最大値を返す"""
+        return (1 << self.bit_width) - 1
+    
+    def get_mask(self) -> int:
+        """ビットマスクを返す"""
+        return (1 << self.bit_width) - 1
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'struct_name': self.struct_name,
+            'member_name': self.member_name,
+            'bit_width': self.bit_width,
+            'base_type': self.base_type,
+            'full_path': self.full_path
+        }
+
+
+@dataclass
 class ParsedData:
     """C言語解析結果データ"""
     file_name: str
@@ -152,6 +179,7 @@ class ParsedData:
     function_info: Optional[FunctionInfo] = None
     enums: Dict[str, List[str]] = field(default_factory=dict)  # enum型名 -> 定数リスト
     enum_values: List[str] = field(default_factory=list)  # すべてのenum定数
+    bitfields: Dict[str, BitFieldInfo] = field(default_factory=dict)  # メンバー名 -> ビットフィールド情報
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -160,7 +188,8 @@ class ParsedData:
             'conditions': [c.to_dict() for c in self.conditions],
             'external_functions': self.external_functions,
             'global_variables': self.global_variables,
-            'function_info': self.function_info.to_dict() if self.function_info else None
+            'function_info': self.function_info.to_dict() if self.function_info else None,
+            'bitfields': {k: v.to_dict() for k, v in self.bitfields.items()}
         }
 
 

@@ -74,7 +74,7 @@ class ASTBuilder:
     
     def _add_fake_includes(self, code: str) -> str:
         """
-        fake_libc_includeを追加
+        fake_libc_includeを追加または標準型定義を追加
         
         Args:
             code: ソースコード
@@ -82,20 +82,24 @@ class ASTBuilder:
         Returns:
             fake_include追加後のコード
         """
-        # pycparserのfake_libc_includeディレクトリのパスを取得
-        try:
-            import pycparser
-            fake_libc_path = os.path.join(
-                os.path.dirname(pycparser.__file__),
-                'utils/fake_libc_include'
-            )
-            
-            if os.path.exists(fake_libc_path):
-                self.logger.debug(f"fake_libc_includeを使用: {fake_libc_path}")
-        except:
-            pass
+        # 標準型定義を追加（stdint.h相当）
+        standard_types = """
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+typedef signed char int8_t;
+typedef signed short int16_t;
+typedef signed int int32_t;
+typedef signed long long int64_t;
+typedef unsigned long size_t;
+typedef long ssize_t;
+typedef int bool;
+
+"""
         
-        return code
+        # コードの先頭に標準型定義を追加
+        return standard_types + code
     
     def _handle_parse_error(self, error: Exception, code: str = "") -> None:
         """

@@ -88,7 +88,19 @@ class CCodeParser:
             # 8. enum定数を抽出
             enums, enum_values = self._extract_enums(ast)
             
-            # 9. ParsedDataを構築
+            # 9. ビットフィールド情報を取得
+            bitfield_dict = {}
+            for member_name, (struct_name, bit_width, base_type) in self.preprocessor.get_bitfields().items():
+                from src.data_structures import BitFieldInfo
+                bitfield_dict[member_name] = BitFieldInfo(
+                    struct_name=struct_name,
+                    member_name=member_name,
+                    bit_width=bit_width,
+                    base_type=base_type,
+                    full_path=f"{struct_name}.{member_name}"
+                )
+            
+            # 10. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
                 function_name=target_function or (function_info.name if function_info else ""),
@@ -97,7 +109,8 @@ class CCodeParser:
                 global_variables=global_variables,
                 function_info=function_info,
                 enums=enums,
-                enum_values=enum_values
+                enum_values=enum_values,
+                bitfields=bitfield_dict
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")

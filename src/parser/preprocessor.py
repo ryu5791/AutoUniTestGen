@@ -37,6 +37,8 @@ class Preprocessor:
         self.function_macros: Dict[str, Tuple[List[str], str]] = {}
         # インクルード済みファイルを追跡（循環インクルード防止）
         self.included_files: set = set()
+        # ビットフィールド情報を保持 {メンバー名: (構造体名, ビット幅, 基本型)}
+        self.bitfields: Dict[str, Tuple[str, int, str]] = {}
     
     def preprocess(self, code: str) -> str:
         """
@@ -59,19 +61,22 @@ class Preprocessor:
         # 2. 条件付きコンパイル処理（#ifdef, #ifndef, #if）
         code = self._process_conditional_compilation(code)
         
-        # 3. 関数マクロ展開
+        # 3. ビットフィールドをコメント化（pycparser互換性のため）
+        code = self._remove_bitfields(code)
+        
+        # 4. 関数マクロ展開
         code = self._expand_function_macros(code)
         
-        # 4. 通常マクロ展開
+        # 5. 通常マクロ展開
         code = self._expand_macros(code)
         
-        # 5. #include処理（削除）
+        # 6. #include処理（削除）
         code = self._handle_includes(code)
         
-        # 6. 残りのディレクティブ処理
+        # 7. 残りのディレクティブ処理
         code = self._process_remaining_directives(code)
         
-        # 7. コメント削除（最後に実行）
+        # 8. コメント削除（最後に実行）
         code = self._remove_comments(code)
         
         # マクロ定義のサマリーをログ出力
@@ -105,6 +110,91 @@ class Preprocessor:
         code = re.sub(r'//.*?$', '', code, flags=re.MULTILINE)
         
         return code
+    
+    def _remove_bitfields(self, code: str) -> str:
+        """
+        ビットフィールド指定をコメント化し、情報を抽出
+        
+        pycparserはビットフィールドの構文を完全にはサポートしていないため、
+        ビット幅指定（: N）をコメント化する。ただし、ビットフィールド情報は
+        別途保持し、テスト生成時に活用する。
+        
+        例:
+            uint16_t internal : 8;  -> uint16_t internal /* : 8 */;
+            uint8_t ram : 1;        -> uint8_t ram /* : 1 */;
+        
+        Args:
+            code: ソースコード
+        
+        Returns:
+            ビットフィールド削除後のコード
+        """
+        # ビットフィールド情報を抽出する拡張パターン
+        # 型 変数名 : ビット幅 ;
+        pattern = r'((?:uint\d+_t|int\d+_t|unsigned\s+\w+|signed\s+\w+|\w+))\s+(\w+)\s*:\s*(\d+)\s*;'
+        
+        modified_lines = []
+        current_struct = None
+        struct_stack = []
+        
+        for line in code.split('\n'):
+            # 構造体/共用体の開始を検出
+            struct_match = re.match(r'\s*(typedef\s+)?(struct|union)\s+(\w+)?\s*\{', line)
+            if struct_match:
+                struct_name = struct_match.group(3) if struct_match.group(3) else f"anonymous_{len(struct_stack)}"
+                struct_stack.append(struct_name)
+                current_struct = struct_name
+                modified_lines.append(line)
+                continue
+            
+            # 構造体/共用体の終了を検出
+            if current_struct and '}' in line:
+                if struct_stack:
+                    struct_stack.pop()
+                current_struct = struct_stack[-1] if struct_stack else None
+                modified_lines.append(line)
+                continue
+            
+            # ビットフィールドを検出
+            match = re.search(pattern, line)
+            if match and current_struct:
+                base_type = match.group(1).strip()
+                member_name = match.group(2)
+                bit_width = int(match.group(3))
+                
+                # ビットフィールド情報を保存
+                self.bitfields[member_name] = (current_struct, bit_width, base_type)
+                
+                # ビット幅をコメント化
+                modified_line = re.sub(
+                    r'(\w+)\s*:\s*(\d+)\s*;',
+                    r'\1 /* : \2 */;',
+                    line
+                )
+                modified_lines.append(modified_line)
+                
+                self.logger.debug(f"ビットフィールド検出: {current_struct}.{member_name} : {bit_width} ({base_type})")
+            else:
+                modified_lines.append(line)
+        
+        modified_code = '\n'.join(modified_lines)
+        
+        # 変更があった場合はログ出力
+        if self.bitfields:
+            self.logger.info(f"ビットフィールド情報を {len(self.bitfields)} 個抽出しました")
+            for member, (struct, width, btype) in self.bitfields.items():
+                self.logger.debug(f"  {struct}.{member}: {width}ビット ({btype})")
+        
+        return modified_code
+    
+    def get_bitfields(self) -> Dict[str, Tuple[str, int, str]]:
+        """
+        抽出されたビットフィールド情報を取得
+        
+        Returns:
+            {メンバー名: (構造体名, ビット幅, 基本型)}
+        """
+        return self.bitfields.copy()
     
     def _collect_defines(self, code: str) -> str:
         """
