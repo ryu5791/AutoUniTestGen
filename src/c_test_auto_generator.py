@@ -167,6 +167,20 @@ class CTestAutoGenerator:
             # 1. C言語ファイルを解析
             print(f"🔍 Step 1/4: C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
+            
+            # パース失敗チェック
+            if parsed_data is None:
+                raise Exception(
+                    f"❌ C言語ファイルの解析に失敗しました\n"
+                    f"   ファイル: {c_file_path}\n"
+                    f"   関数: {target_function}\n"
+                    f"   対処方法:\n"
+                    f"   1. ファイルの構文エラーを確認してください\n"
+                    f"   2. 関数名が正しいか確認してください\n"
+                    f"   3. --log-level DEBUG でデバッグログを確認してください\n"
+                    f"   4. ビットフィールドや複雑な構文がある場合、standard_types.h を確認してください"
+                )
+            
             print(f"   ✓ 解析完了: {len(parsed_data.conditions)}個の条件を検出")
             
             # 2. 真偽表を生成
