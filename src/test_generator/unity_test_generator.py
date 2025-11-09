@@ -16,36 +16,26 @@ from src.test_generator.mock_generator import MockGenerator
 from src.test_generator.test_function_generator import TestFunctionGenerator
 from src.test_generator.prototype_generator import PrototypeGenerator
 from src.test_generator.comment_generator import CommentGenerator
-from src.code_extractor.code_extractor import CodeExtractor  # v2.2: 関数抽出機能
 
 
 class UnityTestGenerator:
     """Unityテストジェネレータ"""
     
-    def __init__(self, include_target_function: bool = True):
-        """
-        初期化
-        
-        Args:
-            include_target_function: テスト対象関数の本体を含めるか（v2.2の新機能）
-        """
+    def __init__(self):
+        """初期化"""
         self.logger = setup_logger(__name__)
         self.mock_gen = MockGenerator()
         self.test_func_gen = TestFunctionGenerator()
         self.proto_gen = PrototypeGenerator()
         self.comment_gen = CommentGenerator()
-        self.code_extractor = CodeExtractor()  # v2.2: 関数抽出機能
-        self.include_target_function = include_target_function  # v2.2
     
-    def generate(self, truth_table: TruthTableData, parsed_data: ParsedData, 
-                 source_code: Optional[str] = None) -> TestCode:
+    def generate(self, truth_table: TruthTableData, parsed_data: ParsedData) -> TestCode:
         """
         Unityテストコードを生成
         
         Args:
             truth_table: 真偽表データ
             parsed_data: 解析済みデータ
-            source_code: 元のソースコード（v2.2: 関数本体抽出用、Noneの場合は抽出しない）
         
         Returns:
             TestCode
@@ -60,8 +50,8 @@ class UnityTestGenerator:
         # 2. #include文
         test_code.includes = self._generate_includes()
         
-        # 3. 型定義（v2.2: parsed_dataを渡して自動生成）
-        test_code.type_definitions = self._generate_type_definitions(parsed_data)
+        # 3. 型定義
+        test_code.type_definitions = self._generate_type_definitions()
         
         # 4. プロトタイプ宣言
         test_code.prototypes = self.proto_gen.generate_prototypes(truth_table, parsed_data)
@@ -80,16 +70,6 @@ class UnityTestGenerator:
         
         # 7. setUp/tearDown
         test_code.setup_teardown = self._generate_setup_teardown()
-        
-        # 8. v2.2: テスト対象関数の本体を抽出して追加
-        if self.include_target_function and source_code:
-            self.logger.info("v2.2: テスト対象関数の本体を抽出中...")
-            target_code = self._extract_target_function(source_code, parsed_data.function_name)
-            if target_code:
-                test_code.target_function_code = target_code
-                self.logger.info("✓ v2.2: テスト対象関数の本体を追加しました")
-            else:
-                self.logger.warning("✗ v2.2: テスト対象関数の本体が抽出できませんでした")
         
         self.logger.info(f"Unityテストコードの生成が完了: {len(truth_table.test_cases)}個のテスト関数")
         
@@ -132,59 +112,22 @@ class UnityTestGenerator:
         
         return '\n'.join(lines)
     
-    def _generate_type_definitions(self, parsed_data: ParsedData = None) -> str:
+    def _generate_type_definitions(self) -> str:
         """
         型定義を生成
-        
-        Args:
-            parsed_data: 解析済みデータ（v2.2: 型定義・変数宣言の自動生成用）
         
         Returns:
             型定義
         """
         lines = []
-        
-        # v2.2: テスト対象関数のプロトタイプ宣言
         lines.append("// ===== テスト対象関数のプロトタイプ宣言 =====")
-        if parsed_data and parsed_data.function_info:
-            func_info = parsed_data.function_info
-            params = []
-            if func_info.parameters:
-                for param in func_info.parameters:
-                    param_type = param.get('type', 'int')
-                    param_name = param.get('name', '')
-                    params.append(f"{param_type} {param_name}")
-            param_str = ', '.join(params) if params else 'void'
-            lines.append(f"extern {func_info.return_type} {func_info.name}({param_str});")
-        else:
-            lines.append("// extern void target_function(void);")
+        lines.append("// extern void target_function(void);")
         lines.append("")
-        
-        # v2.2: 型定義の自動生成
         lines.append("// ===== テスト対象関数で使用される型定義 =====")
-        if parsed_data and parsed_data.typedefs:
-            # 依存関係を解決してソート
-            from src.parser.dependency_resolver import DependencyResolver
-            resolver = DependencyResolver()
-            sorted_typedefs = resolver.resolve_order(parsed_data.typedefs)
-            
-            for typedef in sorted_typedefs:
-                lines.append(typedef.definition)
-                lines.append("")
-        else:
-            lines.append("// typedef enum { ... } MyEnum;")
-            lines.append("")
-        
-        # v2.2: 変数宣言の自動生成
+        lines.append("// typedef enum { ... } MyEnum;")
+        lines.append("")
         lines.append("// ===== 外部変数（テスト対象関数で使用） =====")
-        if parsed_data and parsed_data.variables:
-            for var in parsed_data.variables:
-                if var.is_extern:
-                    lines.append(var.definition)
-        else:
-            lines.append("// extern int global_var;")
-        
-        return '\n'.join(lines)
+        lines.append("// extern int global_var;")
         
         return '\n'.join(lines)
     
@@ -242,30 +185,6 @@ class UnityTestGenerator:
         lines.append("}")
         
         return '\n'.join(lines)
-    
-    def _extract_target_function(self, source_code: str, function_name: str) -> Optional[str]:
-        """
-        テスト対象関数の本体を抽出（v2.2の新機能）
-        
-        Args:
-            source_code: 元のソースコード
-            function_name: 対象関数名
-            
-        Returns:
-            抽出されたコードセクション
-        """
-        try:
-            # 関数本体のみを抽出（依存関係は今回は含めない）
-            extracted = self.code_extractor.extract_function_only(source_code, function_name)
-            
-            if extracted and extracted.has_content():
-                return extracted.to_code_section()
-            
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"関数抽出中にエラーが発生: {e}")
-            return None
 
 
 if __name__ == "__main__":

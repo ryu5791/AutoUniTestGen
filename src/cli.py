@@ -45,7 +45,7 @@ except ImportError:
     from src.template_engine import TemplateEngine, create_template_files
 
 
-VERSION = "2.2"
+VERSION = "1.0.0-phase7"
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -328,22 +328,6 @@ def create_parser() -> argparse.ArgumentParser:
         help='サンプルテンプレートファイルを作成'
     )
     
-    # v2.2: コード生成オプション
-    codegen_group = parser.add_argument_group('v2.2 コード生成オプション')
-    codegen_group.add_argument(
-        '--include-target-function',
-        action='store_true',
-        default=True,
-        help='テスト対象関数の本体をテストコードに含める（デフォルト: 有効）'
-    )
-    
-    codegen_group.add_argument(
-        '--no-include-target-function',
-        dest='include_target_function',
-        action='store_false',
-        help='テスト対象関数の本体をテストコードに含めない'
-    )
-    
     # その他
     parser.add_argument(
         '--version',
@@ -545,14 +529,6 @@ def main():
         error_handler.info("ヘッダーファイル読み込みを有効化")
         if not include_paths:
             error_handler.info("インクルードパスが指定されていないため、カレントディレクトリのみを検索します")
-    
-    # v2.2: --include-target-functionオプション
-    if hasattr(args, 'include_target_function'):
-        config_dict['include_target_function'] = args.include_target_function
-        if args.include_target_function:
-            error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めます")
-        else:
-            error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めません")
     
     # 生成器初期化
     generator = CTestAutoGenerator(config=config_dict)
