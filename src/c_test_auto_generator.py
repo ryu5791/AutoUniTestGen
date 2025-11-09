@@ -96,16 +96,13 @@ class CTestAutoGenerator:
         include_paths = self.config.get('include_paths', [])
         enable_includes = self.config.get('enable_includes', False)
         
-        # v2.2: テスト対象関数本体をテストコードに含めるかの設定
-        include_target_function = self.config.get('include_target_function', True)
-        
         self.parser = CCodeParser(
             defines=defines,
             include_paths=include_paths,
             enable_includes=enable_includes
         )
         self.truth_table_generator = TruthTableGenerator()
-        self.test_generator = UnityTestGenerator(include_target_function=include_target_function)
+        self.test_generator = UnityTestGenerator()
         self.io_table_generator = IOTableGenerator()
         self.excel_writer = ExcelWriter()
     
@@ -186,14 +183,6 @@ class CTestAutoGenerator:
             
             print(f"   ✓ 解析完了: {len(parsed_data.conditions)}個の条件を検出")
             
-            # v2.2: ソースコードを読み込み（関数本体抽出用）
-            source_code = None
-            try:
-                with open(c_file_path, 'r', encoding='utf-8') as f:
-                    source_code = f.read()
-            except Exception as e:
-                print(f"   ⚠ ソースコード読み込みエラー（関数本体は含まれません）: {e}")
-            
             # 2. 真偽表を生成
             print(f"📊 Step 2/4: MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
@@ -201,9 +190,9 @@ class CTestAutoGenerator:
             result.truth_table_path = truth_table_path
             print(f"   ✓ 真偽表生成完了: {len(truth_table.test_cases)}個のテストケース")
             
-            # 3. Unityテストコードを生成（v2.2: source_codeを渡す）
+            # 3. Unityテストコードを生成
             print(f"🧪 Step 3/4: Unityテストコードを生成中...")
-            test_code = self.test_generator.generate(truth_table, parsed_data, source_code)
+            test_code = self.test_generator.generate(truth_table, parsed_data)
             test_code.save(str(test_code_path))
             result.test_code_path = test_code_path
             print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数")

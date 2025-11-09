@@ -15,8 +15,6 @@ from src.data_structures import ParsedData, FunctionInfo
 from src.parser.preprocessor import Preprocessor
 from src.parser.ast_builder import ASTBuilder
 from src.parser.condition_extractor import ConditionExtractor
-from src.parser.typedef_extractor import TypedefExtractor  # v2.2: 追加
-from src.parser.variable_decl_extractor import VariableDeclExtractor  # v2.2: 追加
 
 
 class CCodeParser:
@@ -38,8 +36,6 @@ class CCodeParser:
             enable_includes=enable_includes
         )
         self.ast_builder = ASTBuilder()
-        self.typedef_extractor = TypedefExtractor()  # v2.2: 追加
-        self.variable_extractor = VariableDeclExtractor()  # v2.2: 追加
     
     def parse(self, c_file_path: str, target_function: Optional[str] = None) -> Optional[ParsedData]:
         """
@@ -104,19 +100,7 @@ class CCodeParser:
                     full_path=f"{struct_name}.{member_name}"
                 )
             
-            # 10. v2.2: 型定義を抽出
-            typedefs = self.typedef_extractor.extract_typedefs(ast, code)
-            self.logger.info(f"{len(typedefs)}個の型定義を抽出しました")
-            
-            # 11. v2.2: 変数宣言を抽出
-            variables = self.variable_extractor.extract_variables(
-                ast,
-                target_function or (function_info.name if function_info else ""),
-                conditions
-            )
-            self.logger.info(f"{len(variables)}個の変数宣言を抽出しました")
-            
-            # 12. ParsedDataを構築
+            # 10. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
                 function_name=target_function or (function_info.name if function_info else ""),
@@ -126,9 +110,7 @@ class CCodeParser:
                 function_info=function_info,
                 enums=enums,
                 enum_values=enum_values,
-                bitfields=bitfield_dict,
-                typedefs=typedefs,  # v2.2: 追加
-                variables=variables  # v2.2: 追加
+                bitfields=bitfield_dict
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")

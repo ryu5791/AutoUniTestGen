@@ -86,7 +86,6 @@ class TestCode:
     mock_functions: str = ""
     test_functions: str = ""
     setup_teardown: str = ""
-    target_function_code: str = ""  # v2.2: テスト対象関数の本体
     
     def to_string(self) -> str:
         parts = [
@@ -97,8 +96,7 @@ class TestCode:
             self.mock_variables,
             self.mock_functions,
             self.test_functions,
-            self.setup_teardown,
-            self.target_function_code  # v2.2: 最後に追加
+            self.setup_teardown
         ]
         return '\n\n'.join(p for p in parts if p)
     
@@ -171,42 +169,6 @@ class BitFieldInfo:
 
 
 @dataclass
-class TypedefInfo:
-    """型定義情報 (v2.2で追加)"""
-    name: str
-    typedef_type: str  # 'struct', 'union', 'enum', 'basic'
-    definition: str
-    dependencies: List[str]
-    line_number: int
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'name': self.name,
-            'typedef_type': self.typedef_type,
-            'definition': self.definition,
-            'dependencies': self.dependencies,
-            'line_number': self.line_number
-        }
-
-
-@dataclass
-class VariableDeclInfo:
-    """変数宣言情報 (v2.2で追加)"""
-    name: str
-    var_type: str
-    is_extern: bool
-    definition: str
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'name': self.name,
-            'var_type': self.var_type,
-            'is_extern': self.is_extern,
-            'definition': self.definition
-        }
-
-
-@dataclass
 class ParsedData:
     """C言語解析結果データ"""
     file_name: str
@@ -218,8 +180,6 @@ class ParsedData:
     enums: Dict[str, List[str]] = field(default_factory=dict)  # enum型名 -> 定数リスト
     enum_values: List[str] = field(default_factory=list)  # すべてのenum定数
     bitfields: Dict[str, BitFieldInfo] = field(default_factory=dict)  # メンバー名 -> ビットフィールド情報
-    typedefs: List['TypedefInfo'] = field(default_factory=list)  # v2.2: 型定義情報
-    variables: List['VariableDeclInfo'] = field(default_factory=list)  # v2.2: 変数宣言情報
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -229,9 +189,7 @@ class ParsedData:
             'external_functions': self.external_functions,
             'global_variables': self.global_variables,
             'function_info': self.function_info.to_dict() if self.function_info else None,
-            'bitfields': {k: v.to_dict() for k, v in self.bitfields.items()},
-            'typedefs': [td.to_dict() for td in self.typedefs],
-            'variables': [v.to_dict() for v in self.variables]
+            'bitfields': {k: v.to_dict() for k, v in self.bitfields.items()}
         }
 
 
