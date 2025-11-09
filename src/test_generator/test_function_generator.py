@@ -243,22 +243,43 @@ class TestFunctionGenerator:
         if matching_condition.type == ConditionType.SIMPLE_IF:
             init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
             if init:
-                lines.append(f"    {init};")
+                # セミコロンの前のコメントを考慮してチェック
+                # "変数 = 値;  // コメント" の形式を想定
+                code_part = init.split('//')[0].rstrip()
+                if not code_part.endswith(';'):
+                    lines.append(f"    {init};")
+                else:
+                    lines.append(f"    {init}")
         
         elif matching_condition.type == ConditionType.OR_CONDITION:
             init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                lines.append(f"    {init};")
+                # セミコロンの前のコメントを考慮してチェック
+                code_part = init.split('//')[0].rstrip()
+                if not code_part.endswith(';'):
+                    lines.append(f"    {init};")
+                else:
+                    lines.append(f"    {init}")
         
         elif matching_condition.type == ConditionType.AND_CONDITION:
             init_list = self._generate_and_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                lines.append(f"    {init};")
+                # セミコロンの前のコメントを考慮してチェック
+                code_part = init.split('//')[0].rstrip()
+                if not code_part.endswith(';'):
+                    lines.append(f"    {init};")
+                else:
+                    lines.append(f"    {init}")
         
         elif matching_condition.type == ConditionType.SWITCH:
             init = self._generate_switch_init(matching_condition, test_case, parsed_data)
             if init:
-                lines.append(f"    {init};")
+                # セミコロンの前のコメントを考慮してチェック
+                code_part = init.split('//')[0].rstrip()
+                if not code_part.endswith(';'):
+                    lines.append(f"    {init};")
+                else:
+                    lines.append(f"    {init}")
         
         lines.append("")
         return '\n'.join(lines)
@@ -298,14 +319,14 @@ class TestFunctionGenerator:
                 bitfield = parsed_data.bitfields[var]
                 max_val = bitfield.get_max_value()
                 if truth == 'T':
-                    return f"{var} = 1  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})"
+                    return f"{var} = 1;  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})"
                 else:
-                    return f"{var} = 0  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})"
+                    return f"{var} = 0;  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})"
             
             if truth == 'T':
-                return f"{var} = 1  // TODO: 真になる値を設定"
+                return f"{var} = 1;  // TODO: 真になる値を設定"
             else:
-                return f"{var} = 0  // TODO: 偽になる値を設定"
+                return f"{var} = 0;  // TODO: 偽になる値を設定"
         
         return None
     
@@ -382,7 +403,7 @@ class TestFunctionGenerator:
                             init_list.append(f"// TODO: {var}は関数またはenum定数のため初期化できません")
                         else:
                             val = '1' if truth_val == 'T' else '0'
-                            init_list.append(f"{var} = {val}  // TODO: 適切な値を設定")
+                            init_list.append(f"{var} = {val};  // TODO: 適切な値を設定")
         
         return init_list
     
@@ -418,7 +439,7 @@ class TestFunctionGenerator:
         # default caseの場合（先にチェック）
         if 'case default' in test_case.condition.lower() or test_case.condition.lower().endswith('default'):
             # caseに該当しない値を設定（999など）
-            return f"{switch_var} = 999  // default: caseに該当しない値"
+            return f"{switch_var} = 999;  // default: caseに該当しない値"
         
         # 通常のcase値を抽出
         match = re.search(r'case\s+(\w+)', test_case.condition)
@@ -593,8 +614,11 @@ class TestFunctionGenerator:
                 if expected_value is not None:
                     lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, {var});")
         
-        # アサーションが1つもない場合は空行のみ
+        # アサーションが1つもない場合はTODOコメントを追加
         if len(lines) == 1:
+            lines.append("    // TODO: 期待値を設定してください")
+            lines.append("    // 例: TEST_ASSERT_EQUAL(expected_value, actual_variable);")
+            lines.append("    // 例: TEST_ASSERT_TRUE(condition);")
             lines.append("")
         else:
             lines.append("")
@@ -771,7 +795,7 @@ class TestFunctionGenerator:
         # 値の部分に関数が含まれている場合
         if self._is_function(value_part, parsed_data):
             # 関数の場合はモックの戻り値を使用
-            return f"{var_name} = mock_{value_part}_return_value  // 修正: {value_part}は関数"
+            return f"{var_name} = mock_{value_part}_return_value;  // 修正: {value_part}は関数"
         
         # 値の部分にenum定数が含まれている場合はそのまま（正しい使い方）
         
@@ -785,7 +809,7 @@ class TestFunctionGenerator:
             # グローバル変数の中から適切なものを探す
             for gvar in parsed_data.global_variables:
                 if not self._is_function_or_enum(gvar, parsed_data):
-                    return f"{gvar} = {value_part}  // 修正: {var_name}はenum定数のため{gvar}に代入"
+                    return f"{gvar} = {value_part};  // 修正: {var_name}はenum定数のため{gvar}に代入"
             return f"// ERROR: {var_name}はenum定数のため変数として初期化できません"
         
         return init_code

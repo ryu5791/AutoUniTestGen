@@ -154,10 +154,10 @@ class BoundaryValueCalculator:
                         return f"{variable} = {value}"
                     else:
                         # 偽の場合は異なる値（簡易実装）
-                        return f"{variable} = 0  // TODO: {value}以外の値を設定"
+                        return f"{variable} = 0;  // TODO: {value}以外の値を設定"
                 elif operator == '!=':
                     if truth == 'T':
-                        return f"{variable} = 0  // TODO: {value}以外の値を設定"
+                        return f"{variable} = 0;  // TODO: {value}以外の値を設定"
                     else:
                         return f"{variable} = {value}"
             else:
