@@ -45,7 +45,7 @@ except (ImportError, SystemError):
     from src.template_engine import TemplateEngine, create_template_files
 
 
-VERSION = "2.3.6"
+VERSION = "2.3.7"
 
 
 def create_parser() -> argparse.ArgumentParser:
