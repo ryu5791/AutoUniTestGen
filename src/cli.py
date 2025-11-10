@@ -12,7 +12,19 @@ Phase 7の新機能:
 
 import argparse
 import sys
+import os
 from pathlib import Path
+
+# Windowsでの実行を考慮して、確実にパスを設定
+current_file = Path(__file__).resolve()
+src_dir = current_file.parent
+parent_dir = src_dir.parent
+
+# パスが設定されていない場合は追加
+if str(parent_dir) not in sys.path:
+    sys.path.insert(0, str(parent_dir))
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
 
 # 相対importと絶対importの両方に対応
 try:
@@ -26,23 +38,29 @@ try:
         get_performance_monitor, get_memory_monitor, get_result_cache
     )
     from .template_engine import TemplateEngine, create_template_files
-except ImportError:
-    # 直接実行された場合（python src/cli.py）
-    # srcディレクトリの親をパスに追加
-    import os
-    parent_dir = Path(__file__).resolve().parent.parent
-    if str(parent_dir) not in sys.path:
-        sys.path.insert(0, str(parent_dir))
-    
-    from src.c_test_auto_generator import CTestAutoGenerator
-    from src.config import ConfigManager
-    from src.error_handler import ErrorHandler, ErrorLevel, get_error_handler
-    from src.batch_processor import BatchProcessor
-    from src.performance import (
-        PerformanceMonitor, MemoryMonitor, ResultCache,
-        get_performance_monitor, get_memory_monitor, get_result_cache
-    )
-    from src.template_engine import TemplateEngine, create_template_files
+except (ImportError, SystemError) as e:
+    # 直接実行された場合やWindows環境での実行
+    try:
+        from c_test_auto_generator import CTestAutoGenerator
+        from config import ConfigManager
+        from error_handler import ErrorHandler, ErrorLevel, get_error_handler
+        from batch_processor import BatchProcessor
+        from performance import (
+            PerformanceMonitor, MemoryMonitor, ResultCache,
+            get_performance_monitor, get_memory_monitor, get_result_cache
+        )
+        from template_engine import TemplateEngine, create_template_files
+    except ImportError:
+        # src.を付けてインポート
+        from src.c_test_auto_generator import CTestAutoGenerator
+        from src.config import ConfigManager
+        from src.error_handler import ErrorHandler, ErrorLevel, get_error_handler
+        from src.batch_processor import BatchProcessor
+        from src.performance import (
+            PerformanceMonitor, MemoryMonitor, ResultCache,
+            get_performance_monitor, get_memory_monitor, get_result_cache
+        )
+        from src.template_engine import TemplateEngine, create_template_files
 
 
 VERSION = "2.2"
