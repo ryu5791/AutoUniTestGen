@@ -41,13 +41,14 @@ class PrototypeGenerator:
         # 1. モック/スタブ関数のプロトタイプ
         lines.append("// モック・スタブ関数")
         mock_protos = self._generate_mock_prototypes(parsed_data)
+        self.logger.info(f"モック関数のプロトタイプを {len([p for p in mock_protos if 'mock_' in p])} 個生成")
         lines.extend(mock_protos)
         lines.append("")
         
         # 2. テスト関数のプロトタイプ
-        lines.append("// テスト関数")
-        test_protos = self._generate_test_prototypes(truth_table)
-        lines.extend(test_protos)
+        # 注意: テスト関数のプロトタイプは各関数本体の直前に生成されるため、ここでは生成しない
+        lines.append("// テスト関数のプロトタイプは各関数本体の直前に配置されています")
+        self.logger.info(f"テスト関数のプロトタイプは各関数本体の直前に配置（{len(truth_table.test_cases)} 個）")
         lines.append("")
         
         # 3. ヘルパー関数のプロトタイプ

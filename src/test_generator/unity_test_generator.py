@@ -156,8 +156,13 @@ class UnityTestGenerator:
                     params.append(f"{param_type} {param_name}")
             param_str = ', '.join(params) if params else 'void'
             lines.append(f"extern {func_info.return_type} {func_info.name}({param_str});")
+        elif parsed_data and parsed_data.function_name:
+            # function_infoがない場合でも、関数名があればプロトタイプを生成
+            lines.append(f"extern void {parsed_data.function_name}(void);")
+            lines.append(f"// 注意: 関数情報が不完全なため、戻り値と引数を手動で修正してください")
         else:
             lines.append("// extern void target_function(void);")
+            lines.append("// 警告: テスト対象関数の情報が取得できませんでした")
         lines.append("")
         
         # v2.2: 型定義の自動生成
@@ -168,23 +173,27 @@ class UnityTestGenerator:
             resolver = DependencyResolver()
             sorted_typedefs = resolver.resolve_order(parsed_data.typedefs)
             
+            self.logger.info(f"型定義を {len(sorted_typedefs)} 個生成します")
             for typedef in sorted_typedefs:
                 lines.append(typedef.definition)
                 lines.append("")
         else:
-            lines.append("// typedef enum { ... } MyEnum;")
+            lines.append("// 型定義が検出されませんでした")
+            lines.append("// 必要に応じて元のソースから手動でコピーしてください")
             lines.append("")
         
         # v2.2: 変数宣言の自動生成
         lines.append("// ===== 外部変数（テスト対象関数で使用） =====")
         if parsed_data and parsed_data.variables:
-            for var in parsed_data.variables:
-                if var.is_extern:
+            extern_vars = [var for var in parsed_data.variables if var.is_extern]
+            if extern_vars:
+                self.logger.info(f"外部変数を {len(extern_vars)} 個生成します")
+                for var in extern_vars:
                     lines.append(var.definition)
+            else:
+                lines.append("// 外部変数が検出されませんでした")
         else:
-            lines.append("// extern int global_var;")
-        
-        return '\n'.join(lines)
+            lines.append("// 外部変数が検出されませんでした")
         
         return '\n'.join(lines)
     
@@ -208,8 +217,17 @@ class UnityTestGenerator:
         lines.append(summary)
         lines.append("")
         
-        # 各テスト関数を生成
+        # 各テスト関数を生成（プロトタイプ宣言 + 本体）
         for test_case in truth_table.test_cases:
+            # テスト関数名を生成
+            func_name = self.test_func_gen._generate_test_name(test_case, parsed_data)
+            
+            # プロトタイプ宣言を追加
+            lines.append(f"// プロトタイプ宣言")
+            lines.append(f"void {func_name}(void);")
+            lines.append("")
+            
+            # テスト関数本体を生成
             test_func = self.test_func_gen.generate_test_function(test_case, parsed_data)
             lines.append(test_func)
             lines.append("")
