@@ -107,7 +107,7 @@ class CTestAutoGenerator:
         self.truth_table_generator = TruthTableGenerator()
         self.test_generator = UnityTestGenerator(include_target_function=include_target_function)
         self.io_table_generator = IOTableGenerator()
-        self.excel_writer = ExcelWriter()
+        # self.excel_writer = ExcelWriter()  # 一時的にコメントアウト
     
     def generate_all(
         self,
