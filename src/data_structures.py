@@ -87,6 +87,7 @@ class TestCode:
     test_functions: str = ""
     setup_teardown: str = ""
     target_function_code: str = ""  # v2.2: テスト対象関数の本体
+    main_function: str = ""  # v2.3: main関数
     
     def to_string(self) -> str:
         parts = [
@@ -98,7 +99,8 @@ class TestCode:
             self.mock_functions,
             self.test_functions,
             self.setup_teardown,
-            self.target_function_code  # v2.2: 最後に追加
+            self.target_function_code,  # v2.2: 最後の前に追加
+            self.main_function  # v2.3: 最後に追加
         ]
         return '\n\n'.join(p for p in parts if p)
     

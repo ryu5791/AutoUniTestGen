@@ -6,12 +6,12 @@ UnityTestGeneratorモジュール
 
 import sys
 import os
-from typing import Optional
+from typing import Optional, List
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger
-from src.data_structures import ParsedData, TruthTableData, TestCode
+from src.data_structures import ParsedData, TruthTableData, TestCode, TestCase
 from src.test_generator.mock_generator import MockGenerator
 from src.test_generator.test_function_generator import TestFunctionGenerator
 from src.test_generator.prototype_generator import PrototypeGenerator
@@ -90,6 +90,9 @@ class UnityTestGenerator:
                 self.logger.info("✓ v2.2: テスト対象関数の本体を追加しました")
             else:
                 self.logger.warning("✗ v2.2: テスト対象関数の本体が抽出できませんでした")
+        
+        # 9. v2.3: main関数を生成
+        test_code.main_function = self._generate_main_function(truth_table, parsed_data)
         
         self.logger.info(f"Unityテストコードの生成が完了: {len(truth_table.test_cases)}個のテスト関数")
         
@@ -284,6 +287,119 @@ class UnityTestGenerator:
         except Exception as e:
             self.logger.error(f"関数抽出中にエラーが発生: {e}")
             return None
+    
+    def _generate_main_function(self, truth_table: TruthTableData, parsed_data: ParsedData) -> str:
+        """
+        main関数を生成（v2.3の新機能）
+        
+        Args:
+            truth_table: 真偽表データ
+            parsed_data: 解析済みデータ
+            
+        Returns:
+            main関数のコード
+        """
+        lines = []
+        lines.append("// ===== main関数 =====")
+        lines.append("")
+        lines.append("/**")
+        lines.append(" * テストスイートのエントリーポイント")
+        lines.append(" */")
+        lines.append("int main(void) {")
+        lines.append("    UNITY_BEGIN();")
+        lines.append("    ")
+        
+        # ヘッダー情報
+        lines.append("    printf(\"==============================================\\n\");")
+        lines.append(f"    printf(\"{parsed_data.function_name} Function MC/DC 100%% Coverage Test Suite\\n\");")
+        lines.append("    printf(\"==============================================\\n\");")
+        lines.append("    printf(\"Target: MC/DC (Modified Condition/Decision Coverage) 100%%\\n\");")
+        lines.append(f"    printf(\"Total Test Cases: {truth_table.total_tests}\\n\");")
+        lines.append("    printf(\"==============================================\\n\\n\");")
+        lines.append("    ")
+        
+        # 条件の種類別にテストケースをグループ化
+        grouped_tests = self._group_test_cases_by_condition(truth_table.test_cases)
+        
+        # グループごとにRUN_TESTを生成
+        for group_idx, (condition_desc, test_cases) in enumerate(grouped_tests, 1):
+            if group_idx > 1:
+                lines.append("    ")
+            
+            # グループのヘッダー
+            start_no = test_cases[0].no
+            end_no = test_cases[-1].no
+            lines.append(f"    printf(\"--- {condition_desc} (No.{start_no}-{end_no}) ---\\n\");")
+            
+            # 各テストケースのRUN_TEST
+            for test_case in test_cases:
+                func_name = self.test_func_gen._generate_test_name(test_case, parsed_data)
+                lines.append(f"    RUN_TEST({func_name});")
+        
+        lines.append("    ")
+        lines.append("    return UNITY_END();")
+        lines.append("}")
+        
+        return '\n'.join(lines)
+    
+    def _group_test_cases_by_condition(self, test_cases: List[TestCase]) -> List[tuple]:
+        """
+        テストケースを条件別にグループ化
+        
+        Args:
+            test_cases: テストケースのリスト
+            
+        Returns:
+            (条件の説明, テストケースのリスト)のタプルのリスト
+        """
+        if not test_cases:
+            return []
+        
+        groups = []
+        current_condition = None
+        current_group = []
+        
+        for test_case in test_cases:
+            # 条件を簡略化（長すぎる場合は切り詰め）
+            condition = test_case.condition
+            if len(condition) > 50:
+                condition = condition[:47] + "..."
+            
+            if current_condition is None:
+                current_condition = condition
+                current_group = [test_case]
+            elif current_condition == condition:
+                current_group.append(test_case)
+            else:
+                # グループを保存
+                groups.append((self._get_condition_description(current_condition), current_group))
+                # 新しいグループを開始
+                current_condition = condition
+                current_group = [test_case]
+        
+        # 最後のグループを保存
+        if current_group:
+            groups.append((self._get_condition_description(current_condition), current_group))
+        
+        return groups
+    
+    def _get_condition_description(self, condition: str) -> str:
+        """
+        条件の説明を生成
+        
+        Args:
+            condition: 条件式
+            
+        Returns:
+            説明文
+        """
+        # "if (...)" や "switch (...)" から条件部分を抽出
+        if "if" in condition:
+            return "Condition Tests"
+        elif "switch" in condition:
+            return "Switch Case Tests"
+        else:
+            return "Tests"
 
 
 if __name__ == "__main__":
