@@ -144,6 +144,13 @@ class BoundaryValueCalculator:
             
             if is_identifier:
                 # 識別子同士の比較（例: mx63 == m47）
+                # 左辺または右辺が関数呼び出しでないことを確認
+                if self._is_function_call(variable) or self._is_function_call(str(value)):
+                    if self._is_function_call(variable):
+                        return f"// TODO: {variable}は関数呼び出しのため初期化できません"
+                    else:
+                        return f"// TODO: {value}は関数呼び出しのため初期化できません"
+                
                 if operator == '==':
                     if truth == 'T':
                         return f"{variable} = {value}"
@@ -157,6 +164,10 @@ class BoundaryValueCalculator:
                         return f"{variable} = {value}"
             else:
                 # 数値との比較
+                # 左辺が関数呼び出しでないことを確認
+                if self._is_function_call(variable):
+                    return f"// TODO: {variable}は関数呼び出しのため初期化できません"
+                
                 test_value = self.calculate_boundary(operator, value, truth)
                 return f"{variable} = {test_value}"
         
@@ -193,6 +204,16 @@ class BoundaryValueCalculator:
         
         # 右辺が識別子（変数）の場合のみ、両辺に値を設定
         if right_type == 'identifier':
+            # 左辺または右辺が関数呼び出しの場合は、初期化コードを生成しない
+            if self._is_function_call(left) or self._is_function_call(right):
+                # 関数呼び出しは初期化できないため、TODOコメントを生成
+                if self._is_function_call(left) and self._is_function_call(right):
+                    return [f"// TODO: {left}と{right}は関数呼び出しのため初期化できません"]
+                elif self._is_function_call(left):
+                    return [f"// TODO: {left}は関数呼び出しのため初期化できません"]
+                else:
+                    return [f"// TODO: {right}は関数呼び出しのため初期化できません"]
+            
             if operator == '!=':
                 # 不等号の場合
                 if truth == 'T':
@@ -258,6 +279,19 @@ class BoundaryValueCalculator:
                 init_list.append(test_value_code)
         
         return init_list
+    
+    def _is_function_call(self, identifier: str) -> bool:
+        """
+        識別子が関数呼び出しかどうかを判定
+        
+        Args:
+            identifier: 識別子（例: "Utf12()", "var", "obj.member"）
+        
+        Returns:
+            関数呼び出しの場合True
+        """
+        # 関数呼び出しのパターン: 識別子の後に括弧がある
+        return '(' in identifier and ')' in identifier
     
     def extract_variables(self, expression: str) -> list:
         """

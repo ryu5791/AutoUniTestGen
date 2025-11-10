@@ -202,6 +202,33 @@ def test_generate_comparison_values():
     assert "counter = 31" in values7[0]
     print("✓ テスト7成功")
     
+    # テストケース8: 関数呼び出しとの比較（NEW）
+    print("\n--- テスト8: 関数呼び出しとの比較 ---")
+    expr8 = "Utf12() != 0"
+    values8 = calc.generate_comparison_values(expr8, 'T')
+    print(f"式: {expr8}")
+    print(f"真偽: T")
+    print("生成されたコード:")
+    for code in values8:
+        print(f"  {code}")
+    assert len(values8) == 1, "関数呼び出しはTODOコメントのみ"
+    assert "TODO" in values8[0], "TODOコメントが含まれるべき"
+    assert "Utf12()" in values8[0], "関数名が含まれるべき"
+    print("✓ テスト8成功")
+    
+    # テストケース9: 関数呼び出し同士の比較（NEW）
+    print("\n--- テスト9: 関数呼び出し同士の比較 ---")
+    expr9 = "func1() == func2()"
+    values9 = calc.generate_comparison_values(expr9, 'T')
+    print(f"式: {expr9}")
+    print(f"真偽: T")
+    print("生成されたコード:")
+    for code in values9:
+        print(f"  {code}")
+    assert len(values9) == 1, "関数呼び出しはTODOコメントのみ"
+    assert "TODO" in values9[0], "TODOコメントが含まれるべき"
+    print("✓ テスト9成功")
+    
     print("\n" + "=" * 70)
     print("✅ generate_comparison_valuesテスト: すべて成功")
     print("=" * 70)
