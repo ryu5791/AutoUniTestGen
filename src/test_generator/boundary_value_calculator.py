@@ -70,6 +70,27 @@ class BoundaryValueCalculator:
         
         return value
     
+    def _is_function_call(self, identifier: str) -> bool:
+        """
+        識別子が関数呼び出しかどうかを判定
+        
+        Args:
+            identifier: 識別子文字列
+        
+        Returns:
+            関数呼び出しの場合True
+        
+        Examples:
+            >>> calc._is_function_call("Utf12()")
+            True
+            >>> calc._is_function_call("variable")
+            False
+            >>> calc._is_function_call("array[0]")
+            False
+        """
+        # 関数呼び出しパターン: 識別子の後に()がある
+        return bool(re.match(r'\w+\s*\(\s*.*?\s*\)$', identifier.strip()))
+    
     def parse_comparison(self, expression: str) -> Optional[Dict]:
         """
         比較式をパース
@@ -85,12 +106,37 @@ class BoundaryValueCalculator:
             {'variable': 'v10', 'operator': '>', 'value': 30}
             >>> calc.parse_comparison("mx63 == m47")
             {'variable': 'mx63', 'operator': '==', 'value': 'm47', 'is_identifier': True}
+            >>> calc.parse_comparison("Utf12() != 0")
+            {'variable': 'Utf12()', 'operator': '!=', 'value': 0, 'is_function_call': True}
+            >>> calc.parse_comparison("Utx112.Utm10 != Utx104.Utm10")
+            {'variable': 'Utx112.Utm10', 'operator': '!=', 'value': 'Utx104.Utm10', 'is_identifier': True}
         """
         # 比較演算子のパターン（長い順にマッチング）
-        # まず、識別子同士の比較を試す
+        # まず、関数呼び出しとの比較を試す（例: Utf12() != 0）
+        function_call_patterns = [
+            (r'(\w+\s*\([^\)]*\))\s*==\s*(-?\d+)', '=='),
+            (r'(\w+\s*\([^\)]*\))\s*!=\s*(-?\d+)', '!='),
+            (r'(\w+\s*\([^\)]*\))\s*>\s*(-?\d+)', '>'),
+            (r'(\w+\s*\([^\)]*\))\s*<\s*(-?\d+)', '<'),
+            (r'(\w+\s*\([^\)]*\))\s*>=\s*(-?\d+)', '>='),
+            (r'(\w+\s*\([^\)]*\))\s*<=\s*(-?\d+)', '<='),
+        ]
+        
+        for pattern, operator in function_call_patterns:
+            match = re.search(pattern, expression)
+            if match:
+                return {
+                    'variable': match.group(1),
+                    'operator': operator,
+                    'value': int(match.group(2)),
+                    'is_function_call': True
+                }
+        
+        # 次に、識別子同士の比較を試す（構造体メンバーアクセスを含む）
+        # 構造体メンバーアクセスパターン: word.word または word[n].word
         identifier_patterns = [
-            (r'(\w+(?:\[\d+\])?)\s*==\s*(\w+)', '=='),
-            (r'(\w+(?:\[\d+\])?)\s*!=\s*(\w+)', '!='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*==\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '=='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*!=\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '!='),
         ]
         
         for pattern, operator in identifier_patterns:
@@ -98,6 +144,21 @@ class BoundaryValueCalculator:
             if match:
                 var = match.group(1)
                 val = match.group(2)
+                
+                # 左辺が関数呼び出しの場合はスキップ
+                if self._is_function_call(var):
+                    continue
+                
+                # 右辺が関数呼び出しの場合は特別フラグを設定
+                if self._is_function_call(val):
+                    return {
+                        'variable': var,
+                        'operator': operator,
+                        'value': val,
+                        'is_function_call': True,
+                        'is_right_function': True
+                    }
+                
                 # 値が数値でない場合は識別子
                 if not val.lstrip('-').isdigit():
                     return {
@@ -108,18 +169,24 @@ class BoundaryValueCalculator:
                     }
         
         # 次に、数値との比較
+        # 構造体メンバーアクセスも含める
         patterns = [
-            (r'(\w+(?:\[\d+\])?)\s*>=\s*(-?\d+)', '>='),
-            (r'(\w+(?:\[\d+\])?)\s*<=\s*(-?\d+)', '<='),
-            (r'(\w+(?:\[\d+\])?)\s*==\s*(-?\d+)', '=='),
-            (r'(\w+(?:\[\d+\])?)\s*!=\s*(-?\d+)', '!='),
-            (r'(\w+(?:\[\d+\])?)\s*>\s*(-?\d+)', '>'),
-            (r'(\w+(?:\[\d+\])?)\s*<\s*(-?\d+)', '<'),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*>=\s*(-?\d+)', '>='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*<=\s*(-?\d+)', '<='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*==\s*(-?\d+)', '=='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*!=\s*(-?\d+)', '!='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*>\s*(-?\d+)', '>'),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*<\s*(-?\d+)', '<'),
         ]
         
         for pattern, operator in patterns:
             match = re.search(pattern, expression)
             if match:
+                var = match.group(1)
+                # 左辺が関数呼び出しの場合はスキップ
+                if self._is_function_call(var):
+                    continue
+                    
                 return {
                     'variable': match.group(1),
                     'operator': operator,
@@ -146,6 +213,28 @@ class BoundaryValueCalculator:
             operator = comparison['operator']
             value = comparison.get('value')
             is_identifier = comparison.get('is_identifier', False)
+            is_function_call = comparison.get('is_function_call', False)
+            is_right_function = comparison.get('is_right_function', False)
+            
+            # 左辺が関数呼び出しの場合は、変数として代入できないのでNoneを返す
+            if is_function_call and not is_right_function:
+                # 関数呼び出しは代入の左辺にはできない
+                return None
+            
+            if is_right_function:
+                # 右辺が関数呼び出しの場合（例: var == Utf12()）
+                # モックの戻り値を使用するコメントを返す
+                func_name = value.replace('()', '').strip()
+                if operator == '==':
+                    if truth == 'T':
+                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と一致させる"
+                    else:
+                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と不一致にする"
+                elif operator == '!=':
+                    if truth == 'T':
+                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と不一致にする"
+                    else:
+                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と一致させる"
             
             if is_identifier:
                 # 識別子同士の比較（例: mx63 == m47）

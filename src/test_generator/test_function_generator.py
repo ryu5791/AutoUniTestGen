@@ -300,6 +300,10 @@ class TestFunctionGenerator:
         test_value = self.boundary_calc.generate_test_value(condition.expression, truth)
         
         if test_value:
+            # 関数呼び出しが含まれる場合はTODOコメントとしてそのまま返す
+            if test_value.startswith("//"):
+                return test_value
+            
             # ビットフィールドの場合はマスク処理を追加
             test_value = self._apply_bitfield_mask(test_value, parsed_data)
             # 生成された初期化コードが関数やenum定数を使っていないか検証
@@ -310,6 +314,13 @@ class TestFunctionGenerator:
         variables = self.boundary_calc.extract_variables(condition.expression)
         if variables:
             var = variables[0]
+            
+            # 関数呼び出しかチェック（例: Utf12()）
+            if self._is_function_call_pattern(var):
+                # 関数呼び出しは変数として初期化できない
+                func_name = var.replace('()', '').strip()
+                return f"// TODO: mock_{func_name}_return_value を設定してください"
+            
             # 関数かenum定数でないことを確認
             if self._is_function_or_enum(var, parsed_data):
                 return f"// TODO: {var}は関数またはenum定数のため初期化できません"
@@ -329,6 +340,18 @@ class TestFunctionGenerator:
                 return f"{var} = 0;  // TODO: 偽になる値を設定"
         
         return None
+    
+    def _is_function_call_pattern(self, identifier: str) -> bool:
+        """
+        識別子が関数呼び出しパターンかどうかを判定
+        
+        Args:
+            identifier: 識別子文字列
+        
+        Returns:
+            関数呼び出しの場合True
+        """
+        return bool(re.match(r'\w+\s*\(\s*.*?\s*\)$', identifier.strip()))
     
     def _apply_bitfield_mask(self, init_code: str, parsed_data: ParsedData) -> str:
         """
@@ -390,14 +413,25 @@ class TestFunctionGenerator:
                 test_value = self.boundary_calc.generate_test_value(cond, truth_val)
                 
                 if test_value:
-                    # 関数やenum定数の誤使用を修正
-                    test_value = self._validate_and_fix_init_code(test_value, parsed_data)
-                    init_list.append(test_value)
+                    # 関数呼び出しが含まれる場合はTODOコメントとしてそのまま追加
+                    if test_value.startswith("//"):
+                        init_list.append(test_value)
+                    else:
+                        # 関数やenum定数の誤使用を修正
+                        test_value = self._validate_and_fix_init_code(test_value, parsed_data)
+                        init_list.append(test_value)
                 else:
                     # デフォルト値
                     variables = self.boundary_calc.extract_variables(cond)
                     if variables:
                         var = variables[0]
+                        
+                        # 関数呼び出しかチェック
+                        if self._is_function_call_pattern(var):
+                            func_name = var.replace('()', '').strip()
+                            init_list.append(f"// TODO: mock_{func_name}_return_value を設定してください")
+                            continue
+                        
                         # 関数またはenum定数でないことを確認
                         if self._is_function_or_enum(var, parsed_data):
                             init_list.append(f"// TODO: {var}は関数またはenum定数のため初期化できません")
