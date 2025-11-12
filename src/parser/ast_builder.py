@@ -144,11 +144,13 @@ typedef enum { false = 0, true = 1 } bool;
     def _get_embedded_macro_definitions(self) -> str:
         """
         埋め込みマクロ定義を返す（フォールバック用）
-        
-        注: pycparserは#defineをサポートしないため、
-        型定義やenumで代用するか、空文字列を返す
         """
-        return ""
+        return """
+#define NULL ((void*)0)
+#define INT8_MIN   (-127 - 1)
+#define INT8_MAX   127
+#define UINT8_MAX  0xffU
+"""
     
     def _handle_parse_error(self, error: Exception, code: str = "") -> None:
         """

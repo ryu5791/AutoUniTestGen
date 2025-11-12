@@ -72,51 +72,59 @@ class BoundaryValueCalculator:
     
     def parse_comparison(self, expression: str) -> Optional[Dict]:
         """
-        比較式をパース（構造体メンバアクセス対応）
+        比較式をパース
         
         Args:
             expression: 条件式
         
         Returns:
-            パース結果（左辺、演算子、右辺）
+            パース結果（変数、演算子、値）
         
         Examples:
             >>> calc.parse_comparison("v10 > 30")
-            {'left': 'v10', 'operator': '>', 'right': '30', 'right_type': 'number'}
+            {'variable': 'v10', 'operator': '>', 'value': 30}
             >>> calc.parse_comparison("mx63 == m47")
-            {'left': 'mx63', 'operator': '==', 'right': 'm47', 'right_type': 'identifier'}
-            >>> calc.parse_comparison("Utx112.Utm10 != Utx104.Utm10")
-            {'left': 'Utx112.Utm10', 'operator': '!=', 'right': 'Utx104.Utm10', 'right_type': 'identifier'}
+            {'variable': 'mx63', 'operator': '==', 'value': 'm47', 'is_identifier': True}
         """
-        # 比較演算子のリスト（長い順）
-        operators = ['>=', '<=', '==', '!=', '>', '<']
+        # 比較演算子のパターン（長い順にマッチング）
+        # まず、識別子同士の比較を試す
+        identifier_patterns = [
+            (r'(\w+(?:\[\d+\])?)\s*==\s*(\w+)', '=='),
+            (r'(\w+(?:\[\d+\])?)\s*!=\s*(\w+)', '!='),
+        ]
         
-        for op in operators:
-            if op in expression:
-                parts = expression.split(op, 1)
-                if len(parts) == 2:
-                    left = parts[0].strip()
-                    right = parts[1].strip()
-                    
-                    # 右辺が数値かどうか判定
-                    right_type = 'number' if right.lstrip('-').isdigit() else 'identifier'
-                    
-                    result = {
-                        'left': left,
-                        'operator': op,
-                        'right': right,
-                        'right_type': right_type
+        for pattern, operator in identifier_patterns:
+            match = re.search(pattern, expression)
+            if match:
+                var = match.group(1)
+                val = match.group(2)
+                # 値が数値でない場合は識別子
+                if not val.lstrip('-').isdigit():
+                    return {
+                        'variable': var,
+                        'operator': operator,
+                        'value': val,
+                        'is_identifier': True
                     }
-                    
-                    # 後方互換性のために古い形式も含める
-                    result['variable'] = left
-                    if right_type == 'number':
-                        result['value'] = int(right)
-                    else:
-                        result['value'] = right
-                        result['is_identifier'] = True
-                    
-                    return result
+        
+        # 次に、数値との比較
+        patterns = [
+            (r'(\w+(?:\[\d+\])?)\s*>=\s*(-?\d+)', '>='),
+            (r'(\w+(?:\[\d+\])?)\s*<=\s*(-?\d+)', '<='),
+            (r'(\w+(?:\[\d+\])?)\s*==\s*(-?\d+)', '=='),
+            (r'(\w+(?:\[\d+\])?)\s*!=\s*(-?\d+)', '!='),
+            (r'(\w+(?:\[\d+\])?)\s*>\s*(-?\d+)', '>'),
+            (r'(\w+(?:\[\d+\])?)\s*<\s*(-?\d+)', '<'),
+        ]
+        
+        for pattern, operator in patterns:
+            match = re.search(pattern, expression)
+            if match:
+                return {
+                    'variable': match.group(1),
+                    'operator': operator,
+                    'value': int(match.group(2))
+                }
         
         return None
     
@@ -130,9 +138,6 @@ class BoundaryValueCalculator:
         
         Returns:
             テスト値の設定コード（例: "v10 = 31"）
-            
-        Note:
-            識別子同士の比較の場合は、generate_comparison_values() を使用することを推奨
         """
         comparison = self.parse_comparison(expression)
         
@@ -144,13 +149,6 @@ class BoundaryValueCalculator:
             
             if is_identifier:
                 # 識別子同士の比較（例: mx63 == m47）
-                # 左辺または右辺が関数呼び出しでないことを確認
-                if self._is_function_call(variable) or self._is_function_call(str(value)):
-                    if self._is_function_call(variable):
-                        return f"// TODO: {variable}は関数呼び出しのため初期化できません"
-                    else:
-                        return f"// TODO: {value}は関数呼び出しのため初期化できません"
-                
                 if operator == '==':
                     if truth == 'T':
                         return f"{variable} = {value}"
@@ -164,162 +162,21 @@ class BoundaryValueCalculator:
                         return f"{variable} = {value}"
             else:
                 # 数値との比較
-                # 左辺が関数呼び出しでないことを確認
-                if self._is_function_call(variable):
-                    return f"// TODO: {variable}は関数呼び出しのため初期化できません"
-                
                 test_value = self.calculate_boundary(operator, value, truth)
                 return f"{variable} = {test_value}"
         
         return None
     
-    def generate_comparison_values(self, expression: str, truth: str) -> list:
-        """
-        比較式の両辺に適切な値を設定するコードを生成
-        
-        Args:
-            expression: 条件式
-            truth: 真偽（'T' or 'F'）
-        
-        Returns:
-            初期化コードのリスト
-        
-        Examples:
-            >>> calc.generate_comparison_values("Utx112.Utm10 != Utx104.Utm10", 'T')
-            ['Utx112.Utm10 = 1;  // 左辺', 'Utx104.Utm10 = 0;  // 右辺（異なる値）']
-            >>> calc.generate_comparison_values("var1 == var2", 'T')
-            ['var1 = 1;  // 左辺', 'var2 = 1;  // 右辺（同じ値）']
-        """
-        comparison = self.parse_comparison(expression)
-        
-        if not comparison:
-            return []
-        
-        left = comparison['left']
-        operator = comparison['operator']
-        right = comparison['right']
-        right_type = comparison['right_type']
-        
-        init_list = []
-        
-        # 右辺が識別子（変数）の場合のみ、両辺に値を設定
-        if right_type == 'identifier':
-            # 左辺または右辺が関数呼び出しの場合は、初期化コードを生成しない
-            if self._is_function_call(left) or self._is_function_call(right):
-                # 関数呼び出しは初期化できないため、TODOコメントを生成
-                if self._is_function_call(left) and self._is_function_call(right):
-                    return [f"// TODO: {left}と{right}は関数呼び出しのため初期化できません"]
-                elif self._is_function_call(left):
-                    return [f"// TODO: {left}は関数呼び出しのため初期化できません"]
-                else:
-                    return [f"// TODO: {right}は関数呼び出しのため初期化できません"]
-            
-            if operator == '!=':
-                # 不等号の場合
-                if truth == 'T':
-                    # 真にする: 異なる値を設定
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 0;  // 右辺（異なる値）")
-                else:
-                    # 偽にする: 同じ値を設定
-                    init_list.append(f"{left} = 0;  // 左辺")
-                    init_list.append(f"{right} = 0;  // 右辺（同じ値）")
-            
-            elif operator == '==':
-                # 等号の場合
-                if truth == 'T':
-                    # 真にする: 同じ値を設定
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 1;  // 右辺（同じ値）")
-                else:
-                    # 偽にする: 異なる値を設定
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 0;  // 右辺（異なる値）")
-            
-            elif operator == '>':
-                # 大なり
-                if truth == 'T':
-                    init_list.append(f"{left} = 2;  // 左辺")
-                    init_list.append(f"{right} = 1;  // 右辺（小さい値）")
-                else:
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 2;  // 右辺（大きい値）")
-            
-            elif operator == '>=':
-                # 大なりイコール
-                if truth == 'T':
-                    init_list.append(f"{left} = 2;  // 左辺")
-                    init_list.append(f"{right} = 1;  // 右辺（小さい値）")
-                else:
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 2;  // 右辺（大きい値）")
-            
-            elif operator == '<':
-                # 小なり
-                if truth == 'T':
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 2;  // 右辺（大きい値）")
-                else:
-                    init_list.append(f"{left} = 2;  // 左辺")
-                    init_list.append(f"{right} = 1;  // 右辺（小さい値）")
-            
-            elif operator == '<=':
-                # 小なりイコール
-                if truth == 'T':
-                    init_list.append(f"{left} = 1;  // 左辺")
-                    init_list.append(f"{right} = 2;  // 右辺（大きい値）")
-                else:
-                    init_list.append(f"{left} = 2;  // 左辺")
-                    init_list.append(f"{right} = 1;  // 右辺（小さい値）")
-        
-        else:
-            # 右辺が数値の場合は、従来通り左辺のみ設定
-            test_value_code = self.generate_test_value(expression, truth)
-            if test_value_code:
-                init_list.append(test_value_code)
-        
-        return init_list
-    
-    def _is_function_call(self, identifier: str) -> bool:
-        """
-        識別子が関数呼び出しかどうかを判定
-        
-        Args:
-            identifier: 識別子（例: "Utf12()", "var", "obj.member"）
-        
-        Returns:
-            関数呼び出しの場合True
-        """
-        # 関数呼び出しのパターン: 識別子の後に括弧がある
-        return '(' in identifier and ')' in identifier
-    
     def extract_variables(self, expression: str) -> list:
         """
-        条件式から変数を抽出（構造体メンバアクセス対応）
+        条件式から変数を抽出
         
         Args:
             expression: 条件式
         
         Returns:
             変数名のリスト
-        
-        Examples:
-            >>> calc.extract_variables("v10 > 30")
-            ['v10']
-            >>> calc.extract_variables("Utx112.Utm10 != Utx104.Utm10")
-            ['Utx112.Utm10', 'Utx104.Utm10']
-            >>> calc.extract_variables("a.b.c == 10")
-            ['a.b.c']
         """
-        # まず構造体メンバアクセス（複数レベル対応）を抽出
-        struct_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+)\b'
-        struct_members = re.findall(struct_pattern, expression)
-        
-        # 構造体メンバが見つかった場合はそれを優先
-        if struct_members:
-            return list(set(struct_members))
-        
-        # 構造体メンバが無い場合は通常の変数を抽出
         # 変数パターン（配列アクセス含む）
         pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:\[\d+\])?)\b'
         variables = re.findall(pattern, expression)

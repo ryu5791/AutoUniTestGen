@@ -280,9 +280,9 @@ class Preprocessor:
                         f"関数マクロ検出: {macro_name}({', '.join(params)}) = {macro_body}"
                     )
                 
-                # #define行は削除（pycparserエラー回避）
-                # processed_lines.append(f"// {line}")  # コメント化しない
-                continue  # 行を追加せず、次へ
+                # #define行はコメント化
+                processed_lines.append(f"// {line}")
+                continue
             
             # 通常のマクロの検出: #define MACRO value
             define_match = re.match(r'^\s*#define\s+(\w+)(?:\s+(.+?))?$', line)
@@ -312,9 +312,8 @@ class Preprocessor:
                         f"使用される値: {self.defines[macro_name]}"
                     )
                 
-                # #define行は削除（pycparserエラー回避）
-                # processed_lines.append(f"// {line}")  # コメント化しない
-                continue  # 行を追加せず、次へ
+                # #define行はコメント化（pycparserエラー回避）
+                processed_lines.append(f"// {line}")
             else:
                 processed_lines.append(line)
         
@@ -575,7 +574,7 @@ class Preprocessor:
                 macro_name = ifdef_match.group(1)
                 is_defined = macro_name in self.defines
                 condition_stack.append(('ifdef', is_defined))
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
@@ -585,7 +584,7 @@ class Preprocessor:
                 macro_name = ifndef_match.group(1)
                 is_not_defined = macro_name not in self.defines
                 condition_stack.append(('ifndef', is_not_defined))
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
@@ -595,7 +594,7 @@ class Preprocessor:
                 condition = if_match.group(1).strip()
                 is_true = self._evaluate_condition(condition)
                 condition_stack.append(('if', is_true))
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
@@ -605,7 +604,7 @@ class Preprocessor:
                     cond_type, cond_value = condition_stack.pop()
                     # 条件を反転
                     condition_stack.append((cond_type, not cond_value))
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
@@ -617,7 +616,7 @@ class Preprocessor:
                     condition = elif_match.group(1).strip()
                     is_true = self._evaluate_condition(condition)
                     condition_stack.append(('elif', is_true))
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
@@ -625,12 +624,12 @@ class Preprocessor:
             if re.match(r'^\s*#endif', line):
                 if condition_stack:
                     condition_stack.pop()
-                # ディレクティブ行は削除（pycparser互換性のため）
+                processed_lines.append(f"// {line}")
                 i += 1
                 continue
             
             # 通常の行の処理
-            # 条件が偽の場合は削除
+            # 条件が偽の場合はコメント化
             should_include = True
             if condition_stack:
                 # スタック内のすべての条件が真である必要がある
@@ -638,7 +637,9 @@ class Preprocessor:
             
             if should_include:
                 processed_lines.append(line)
-            # else句削除 - 条件が偽の場合は行を含めない（コメント化もしない）
+            else:
+                # 条件が偽の場合はコメント化
+                processed_lines.append(f"// {line}")
             
             i += 1
         
@@ -852,10 +853,24 @@ class Preprocessor:
         processed_lines = []
         
         for line in lines:
-            # すべてのプリプロセッサディレクティブ（#で始まる行）を完全に削除
-            # _collect_definesと_process_conditional_compilationで既に処理済みのはず
-            if re.match(r'^\s*#', line):
-                # すでに処理済みのディレクティブは削除（空行に置換）
+            # #pragma の検出
+            if re.match(r'^\s*#pragma\s+', line):
+                processed_lines.append(f"// {line}")
+                continue
+            
+            # #undef の検出
+            if re.match(r'^\s*#undef\s+', line):
+                processed_lines.append(f"// {line}")
+                continue
+            
+            # #error の検出
+            if re.match(r'^\s*#error\s+', line):
+                processed_lines.append(f"// {line}")
+                continue
+            
+            # #warning の検出
+            if re.match(r'^\s*#warning\s+', line):
+                processed_lines.append(f"// {line}")
                 continue
             
             processed_lines.append(line)

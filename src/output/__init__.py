@@ -1,3 +1,0 @@
-"""
-Output module for AutoUniTestGen
-"""

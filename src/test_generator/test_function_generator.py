@@ -241,9 +241,10 @@ class TestFunctionGenerator:
         
         # 条件タイプに応じて初期化コードを生成
         if matching_condition.type == ConditionType.SIMPLE_IF:
-            init_list = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
-            for init in init_list:
+            init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
+            if init:
                 # セミコロンの前のコメントを考慮してチェック
+                # "変数 = 値;  // コメント" の形式を想定
                 code_part = init.split('//')[0].rstrip()
                 if not code_part.endswith(';'):
                     lines.append(f"    {init};")
@@ -283,9 +284,9 @@ class TestFunctionGenerator:
         lines.append("")
         return '\n'.join(lines)
     
-    def _generate_simple_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> list:
+    def _generate_simple_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> Optional[str]:
         """
-        単純条件の初期化コードを生成（複数の初期化文を返す）
+        単純条件の初期化コードを生成
         
         Args:
             condition: 条件
@@ -293,26 +294,9 @@ class TestFunctionGenerator:
             parsed_data: 解析済みデータ
         
         Returns:
-            初期化コードのリスト
+            初期化コード
         """
-        init_list = []
-        
-        # まず、識別子同士の比較かチェック（構造体メンバ対応）
-        comparison_values = self.boundary_calc.generate_comparison_values(
-            condition.expression, truth
-        )
-        
-        if comparison_values and len(comparison_values) > 1:
-            # 両辺に値を設定する場合（例: Utx112.Utm10 != Utx104.Utm10）
-            for init_code in comparison_values:
-                # ビットフィールドの場合はマスク処理を追加
-                init_code = self._apply_bitfield_mask(init_code, parsed_data)
-                # 生成された初期化コードが関数やenum定数を使っていないか検証
-                init_code = self._validate_and_fix_init_code(init_code, parsed_data)
-                init_list.append(init_code)
-            return init_list
-        
-        # 従来の処理（単一の値設定）
+        # 境界値を計算
         test_value = self.boundary_calc.generate_test_value(condition.expression, truth)
         
         if test_value:
@@ -320,8 +304,7 @@ class TestFunctionGenerator:
             test_value = self._apply_bitfield_mask(test_value, parsed_data)
             # 生成された初期化コードが関数やenum定数を使っていないか検証
             test_value = self._validate_and_fix_init_code(test_value, parsed_data)
-            init_list.append(test_value)
-            return init_list
+            return test_value
         
         # 境界値計算できない場合
         variables = self.boundary_calc.extract_variables(condition.expression)
@@ -329,26 +312,23 @@ class TestFunctionGenerator:
             var = variables[0]
             # 関数かenum定数でないことを確認
             if self._is_function_or_enum(var, parsed_data):
-                init_list.append(f"// TODO: {var}は関数またはenum定数のため初期化できません")
-                return init_list
+                return f"// TODO: {var}は関数またはenum定数のため初期化できません"
             
             # ビットフィールドかチェック
             if var in parsed_data.bitfields:
                 bitfield = parsed_data.bitfields[var]
                 max_val = bitfield.get_max_value()
                 if truth == 'T':
-                    init_list.append(f"{var} = 1;  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})")
+                    return f"{var} = 1;  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})"
                 else:
-                    init_list.append(f"{var} = 0;  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})")
-                return init_list
+                    return f"{var} = 0;  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})"
             
             if truth == 'T':
-                init_list.append(f"{var} = 1;  // TODO: 真になる値を設定")
+                return f"{var} = 1;  // TODO: 真になる値を設定"
             else:
-                init_list.append(f"{var} = 0;  // TODO: 偽になる値を設定")
-            return init_list
+                return f"{var} = 0;  // TODO: 偽になる値を設定"
         
-        return init_list
+        return None
     
     def _apply_bitfield_mask(self, init_code: str, parsed_data: ParsedData) -> str:
         """

@@ -26,8 +26,8 @@ try:
         get_performance_monitor, get_memory_monitor, get_result_cache
     )
     from .template_engine import TemplateEngine, create_template_files
-except (ImportError, SystemError):
-    # 直接実行された場合（python src/cli.py）またはWindowsでのVSCode実行
+except ImportError:
+    # 直接実行された場合（python src/cli.py）
     # srcディレクトリの親をパスに追加
     import os
     parent_dir = Path(__file__).resolve().parent.parent
@@ -45,7 +45,7 @@ except (ImportError, SystemError):
     from src.template_engine import TemplateEngine, create_template_files
 
 
-VERSION = "2.3.8"
+VERSION = "2.2"
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -550,9 +550,9 @@ def main():
     if hasattr(args, 'include_target_function'):
         config_dict['include_target_function'] = args.include_target_function
         if args.include_target_function:
-            error_handler.info(f"v{VERSION}: テスト対象関数の本体をテストコードに含めます")
+            error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めます")
         else:
-            error_handler.info(f"v{VERSION}: テスト対象関数の本体をテストコードに含めません")
+            error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めません")
     
     # 生成器初期化
     generator = CTestAutoGenerator(config=config_dict)
