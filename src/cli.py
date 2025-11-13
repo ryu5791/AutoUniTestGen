@@ -167,6 +167,13 @@ def create_parser() -> argparse.ArgumentParser:
         help='既存ファイルがある場合はエラーで終了'
     )
     
+    # v2.4.3: スタンドアロンモードオプション
+    parser.add_argument(
+        '--no-standalone',
+        action='store_true',
+        help='スタンドアロンモードを無効化（元のソースとテストコードを分離）'
+    )
+    
     # 出力ファイル名指定
     parser.add_argument(
         '--truth-table',
@@ -553,6 +560,14 @@ def main():
             error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めます")
         else:
             error_handler.info("v2.2: テスト対象関数の本体をテストコードに含めません")
+    
+    # v2.4.3: --no-standaloneオプション
+    if hasattr(args, 'no_standalone') and args.no_standalone:
+        config_dict['standalone_mode'] = False
+        error_handler.info("v2.4.3: スタンドアロンモードを無効化（元のソースとテストコードを分離）")
+    else:
+        config_dict['standalone_mode'] = True
+        error_handler.info("v2.4.3: スタンドアロンモード（元のソースファイルにテストコードを追加）")
     
     # 生成器初期化
     generator = CTestAutoGenerator(config=config_dict)

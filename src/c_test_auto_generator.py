@@ -85,6 +85,7 @@ class CTestAutoGenerator:
         """
         self.config = config or {}
         self.no_overwrite = False  # 上書き禁止フラグ
+        self.standalone_mode = self.config.get('standalone_mode', True)  # v2.4.3: デフォルトでスタンドアロンモード
         self._init_components()
     
     def _init_components(self):
@@ -201,12 +202,28 @@ class CTestAutoGenerator:
             result.truth_table_path = truth_table_path
             print(f"   ✓ 真偽表生成完了: {len(truth_table.test_cases)}個のテストケース")
             
-            # 3. Unityテストコードを生成（v2.2: source_codeを渡す）
+            # 3. Unityテストコードを生成
             print(f"🧪 Step 3/4: Unityテストコードを生成中...")
+            
+            # まず通常のTestCodeオブジェクトを生成（I/O表生成用）
             test_code = self.test_generator.generate(truth_table, parsed_data, source_code)
-            test_code.save(str(test_code_path))
-            result.test_code_path = test_code_path
-            print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数")
+            
+            # v2.4.3: スタンドアロンモードの場合は別途スタンドアロン版も生成
+            if self.standalone_mode and source_code:
+                print(f"   💡 スタンドアロンモード: 元のソースファイルにテストコードを追加します")
+                standalone_code = self.test_generator.generate_standalone(
+                    truth_table, parsed_data, source_code
+                )
+                # スタンドアロン版をファイルに保存
+                with open(str(test_code_path), 'w', encoding='utf-8') as f:
+                    f.write(standalone_code)
+                result.test_code_path = test_code_path
+                print(f"   ✓ スタンドアロン版テストコード生成完了")
+            else:
+                # 従来の方式（v2.2: source_codeを渡す）
+                test_code.save(str(test_code_path))
+                result.test_code_path = test_code_path
+                print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数")
             
             # 4. I/O表を生成
             print(f"📝 Step 4/4: I/O一覧表を生成中...")

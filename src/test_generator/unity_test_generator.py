@@ -98,6 +98,62 @@ class UnityTestGenerator:
         
         return test_code
     
+    def generate_standalone(self, truth_table: TruthTableData, parsed_data: ParsedData, 
+                           source_code: str) -> str:
+        """
+        元のソースファイル全体にテストコードを追加したスタンドアロン版を生成（v2.4.3）
+        
+        Args:
+            truth_table: 真偽表データ
+            parsed_data: 解析済みデータ
+            source_code: 元のソースコード全体
+        
+        Returns:
+            str: スタンドアロンテストコード（元のソース + テストコード）
+        """
+        self.logger.info("v2.4.3: スタンドアロン版テストコードの生成を開始")
+        
+        # 元のソースコードをベースにする
+        parts = [source_code]
+        
+        # 区切り線を追加
+        parts.append("\n\n" + "=" * 80)
+        parts.append("/* 以下、自動生成されたテストコード */")
+        parts.append("=" * 80 + "\n")
+        
+        # Unity framework のインクルード
+        parts.append('#include "unity.h"')
+        
+        # モック変数とモック関数
+        mock_code = self.mock_gen.generate_mocks(parsed_data)
+        if mock_code:
+            parts.append("\n// ===== モック変数とモック関数 =====")
+            parts.append(mock_code)
+        
+        # テスト関数群
+        test_functions = self._generate_all_test_functions(truth_table, parsed_data)
+        if test_functions:
+            parts.append("\n// ===== テスト関数群 =====")
+            parts.append(test_functions)
+        
+        # setUp/tearDown
+        setup_teardown = self._generate_setup_teardown()
+        if setup_teardown:
+            parts.append("\n// ===== setUp/tearDown =====")
+            parts.append(setup_teardown)
+        
+        # main関数
+        main_function = self._generate_main_function(truth_table, parsed_data)
+        if main_function:
+            parts.append("\n// ===== main関数 =====")
+            parts.append(main_function)
+        
+        result = '\n'.join(parts)
+        
+        self.logger.info(f"✓ v2.4.3: スタンドアロン版テストコード生成完了")
+        
+        return result
+    
     def _generate_header(self, parsed_data: ParsedData) -> str:
         """
         ヘッダーコメントを生成
