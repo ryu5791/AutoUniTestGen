@@ -147,6 +147,13 @@ class UnityTestGenerator:
         """
         lines = []
         
+        # v2.4.2: マクロ定義を先頭に追加
+        if parsed_data and parsed_data.macro_definitions:
+            lines.append("// ===== マクロ定義 =====")
+            for macro_def in parsed_data.macro_definitions:
+                lines.append(macro_def)
+            lines.append("")
+        
         # v2.2: テスト対象関数のプロトタイプ宣言
         lines.append("// ===== テスト対象関数のプロトタイプ宣言 =====")
         if parsed_data and parsed_data.function_info:

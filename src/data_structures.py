@@ -222,6 +222,8 @@ class ParsedData:
     bitfields: Dict[str, BitFieldInfo] = field(default_factory=dict)  # メンバー名 -> ビットフィールド情報
     typedefs: List['TypedefInfo'] = field(default_factory=list)  # v2.2: 型定義情報
     variables: List['VariableDeclInfo'] = field(default_factory=list)  # v2.2: 変数宣言情報
+    macros: Dict[str, str] = field(default_factory=dict)  # v2.4.2: マクロ定義 {名前: 値}
+    macro_definitions: List[str] = field(default_factory=list)  # v2.4.2: マクロ定義文字列のリスト
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -233,7 +235,9 @@ class ParsedData:
             'function_info': self.function_info.to_dict() if self.function_info else None,
             'bitfields': {k: v.to_dict() for k, v in self.bitfields.items()},
             'typedefs': [td.to_dict() for td in self.typedefs],
-            'variables': [v.to_dict() for v in self.variables]
+            'variables': [v.to_dict() for v in self.variables],
+            'macros': self.macros,
+            'macro_definitions': self.macro_definitions
         }
 
 

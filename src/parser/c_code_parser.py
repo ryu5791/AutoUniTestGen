@@ -6,6 +6,7 @@ C言語ソースコードを解析してParseDataを生成
 
 import sys
 import os
+import re
 from typing import Optional, Dict
 
 # パスを追加
@@ -66,7 +67,48 @@ class CCodeParser:
             
             if ast is None:
                 self.logger.error("AST構築に失敗")
-                return None
+                self.logger.warning("フォールバックモード: 元のソースから直接定義を抽出します")
+                
+                # v2.4.2: フォールバックモード - 元のソースから直接抽出
+                from src.parser.source_definition_extractor import SourceDefinitionExtractor
+                extractor = SourceDefinitionExtractor()
+                definitions = extractor.extract_all_definitions(code)
+                
+                # ParsedDataを構築（最小限の情報）
+                parsed_data = ParsedData(
+                    file_name=os.path.basename(c_file_path),
+                    function_name=target_function or "",
+                    conditions=[],
+                    external_functions=[],
+                    global_variables=[],
+                    function_info=None,
+                    enums={},
+                    enum_values=[],
+                    bitfields={},
+                    typedefs=[],
+                    variables=[],
+                    macros=definitions['macros'],
+                    macro_definitions=definitions['macro_definitions']
+                )
+                
+                # 型定義もTypedefInfo形式に変換
+                from src.data_structures import TypedefInfo
+                for i, typedef_def in enumerate(definitions['typedef_definitions']):
+                    # 型名を抽出（最後の識別子がたいてい型名）
+                    match = re.search(r'\}\s*(\w+)\s*;', typedef_def)
+                    if match:
+                        typename = match.group(1)
+                        typedef_info = TypedefInfo(
+                            name=typename,
+                            typedef_type='unknown',
+                            definition=typedef_def,
+                            dependencies=[],
+                            line_number=i
+                        )
+                        parsed_data.typedefs.append(typedef_info)
+                
+                self.logger.info(f"フォールバックモードで解析完了: {len(definitions['macro_definitions'])}個のマクロ、{len(definitions['typedef_definitions'])}個の型定義")
+                return parsed_data
             
             # 4. 関数情報を抽出
             function_info = self._extract_function_info(ast, target_function)
@@ -116,6 +158,12 @@ class CCodeParser:
             )
             self.logger.info(f"{len(variables)}個の変数宣言を抽出しました")
             
+            # 11.5. v2.4.2: マクロ定義を元のソースから抽出
+            from src.parser.source_definition_extractor import SourceDefinitionExtractor
+            source_extractor = SourceDefinitionExtractor()
+            macros, macro_definitions = source_extractor.extract_macro_definitions(code)
+            self.logger.info(f"{len(macro_definitions)}個のマクロ定義を抽出しました")
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -128,7 +176,9 @@ class CCodeParser:
                 enum_values=enum_values,
                 bitfields=bitfield_dict,
                 typedefs=typedefs,  # v2.2: 追加
-                variables=variables  # v2.2: 追加
+                variables=variables,  # v2.2: 追加
+                macros=macros,  # v2.4.2: 追加
+                macro_definitions=macro_definitions  # v2.4.2: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
