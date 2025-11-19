@@ -38,4 +38,4 @@ typedef long ptrdiff_t;
 typedef int wchar_t;
 typedef unsigned int wint_t;
 
-typedef _Bool bool;
+typedef enum { false = 0, true = 1 } bool;
