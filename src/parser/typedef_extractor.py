@@ -38,6 +38,56 @@ class TypedefExtractor:
         self.logger = setup_logger(__name__)
         self.typedefs: List[TypedefInfo] = []
         self.source_lines: List[str] = []
+        self.standard_types = self._load_standard_types()
+    
+    def _load_standard_types(self) -> Set[str]:
+        """
+        standard_types.hから標準型を読み込む
+        
+        Returns:
+            標準型名のセット
+        """
+        # パスの構築: src/parser/typedef_extractor.py -> ../../standard_types.h
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        std_types_path = os.path.join(base_path, '../../standard_types.h')
+        
+        standard_types = set()
+        
+        try:
+            with open(std_types_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    # typedef ... type_name; の形式から型名を抽出
+                    match = re.search(r'typedef\s+.*\s+(\w+)\s*;', line)
+                    if match:
+                        type_name = match.group(1)
+                        standard_types.add(type_name)
+            
+            self.logger.info(f"standard_types.hから{len(standard_types)}個の標準型を読み込みました")
+            
+        except FileNotFoundError:
+            self.logger.warning(f"standard_types.h not found at {std_types_path}, using fallback")
+            # フォールバック: 最小限の標準型
+            standard_types = {
+                'int8_t', 'uint8_t', 'int16_t', 'uint16_t',
+                'int32_t', 'uint32_t', 'int64_t', 'uint64_t',
+                'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t',
+                'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t',
+                'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t',
+                'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t',
+                'intmax_t', 'uintmax_t', 'intptr_t', 'uintptr_t',
+                'size_t', 'ssize_t', 'ptrdiff_t', 'wchar_t', 'wint_t',
+                'bool', 'true', 'false'
+            }
+        except Exception as e:
+            self.logger.error(f"standard_types.h読み込み中にエラー: {e}")
+            # フォールバック
+            standard_types = {
+                'int8_t', 'uint8_t', 'int16_t', 'uint16_t',
+                'int32_t', 'uint32_t', 'int64_t', 'uint64_t',
+                'size_t', 'bool'
+            }
+        
+        return standard_types
     
     def extract_typedefs(self, ast, source_code: str) -> List[TypedefInfo]:
         """
@@ -189,21 +239,8 @@ class TypedefExtractor:
         Returns:
             完全な定義文字列
         """
-        # 標準型定義（stdint.h, stdbool.h等で定義される型）
-        standard_types = {
-            'int8_t', 'int16_t', 'int32_t', 'int64_t',
-            'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
-            'int_least8_t', 'int_least16_t', 'int_least32_t', 'int_least64_t',
-            'uint_least8_t', 'uint_least16_t', 'uint_least32_t', 'uint_least64_t',
-            'int_fast8_t', 'int_fast16_t', 'int_fast32_t', 'int_fast64_t',
-            'uint_fast8_t', 'uint_fast16_t', 'uint_fast32_t', 'uint_fast64_t',
-            'intmax_t', 'uintmax_t', 'intptr_t', 'uintptr_t',
-            'size_t', 'ssize_t', 'ptrdiff_t', 'wchar_t', 'wint_t',
-            'bool', 'true', 'false'
-        }
-        
         # 標準型の場合は警告を出さずに簡易定義を返す
-        if name in standard_types:
+        if name in self.standard_types:
             return f"typedef /* standard type */ {name};"
         
         source_code = '\n'.join(self.source_lines)

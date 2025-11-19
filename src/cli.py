@@ -45,7 +45,27 @@ except ImportError:
     from src.template_engine import TemplateEngine, create_template_files
 
 
-VERSION = "2.2"
+def get_version() -> str:
+    """
+    VERSIONファイルからバージョンを取得
+    
+    Returns:
+        バージョン文字列
+    """
+    try:
+        # src/cli.py -> ../VERSION
+        version_file = Path(__file__).resolve().parent.parent / 'VERSION'
+        with open(version_file, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "unknown"
+    except Exception as e:
+        print(f"Warning: Failed to read VERSION file: {e}", file=sys.stderr)
+        return "unknown"
+
+
+VERSION = get_version()
+
 
 
 def create_parser() -> argparse.ArgumentParser:
