@@ -1,8 +1,7 @@
 """
-ConditionAnalyzerモジュール v2.6.0
+ConditionAnalyzerモジュール
 
 条件分岐を分析し、MC/DCテストに必要な情報を抽出
-ネストしたAND/OR条件に完全対応
 """
 
 import sys
@@ -83,37 +82,21 @@ class ConditionAnalyzer:
         
         from src.truth_table.mcdc_pattern_generator import MCDCPatternGenerator
         mcdc_gen = MCDCPatternGenerator()
-        
-        # ネスト構造をチェック
-        has_nested = any('||' in cond or '&&' in cond for cond in conditions)
-        
-        if has_nested:
-            # ネスト構造がある場合は新しいメソッドを使用
-            self.logger.info(f"ネストしたOR条件を検出: {len(conditions)}個の条件")
-            patterns = mcdc_gen.generate_mcdc_patterns_for_complex('or', conditions)
-        else:
-            # シンプルなOR条件
-            patterns = mcdc_gen.generate_or_patterns(n_conditions)
+        patterns = mcdc_gen.generate_or_patterns(n_conditions)
         
         # MC/DC説明を生成
         mcdc_explanation = {}
-        if not has_nested:
-            if n_conditions == 2:
-                mcdc_explanation = {
-                    'TF': '左辺が真、右辺が偽',
-                    'FT': '左辺が偽、右辺が真',
-                    'FF': '両方偽'
-                }
-            elif n_conditions >= 3:
-                for i, pattern in enumerate(patterns[:-1]):  # 最後のFFF以外
-                    if 'T' in pattern:
-                        true_index = pattern.index('T')
-                        mcdc_explanation[pattern] = f'条件{true_index + 1}が真、他が偽'
-                mcdc_explanation[patterns[-1]] = '全て偽'
-        else:
-            # ネスト構造の場合は詳細な説明を生成
-            for i, pattern in enumerate(patterns, 1):
-                mcdc_explanation[pattern] = f'パターン{i}'
+        if n_conditions == 2:
+            mcdc_explanation = {
+                'TF': '左辺が真、右辺が偽',
+                'FT': '左辺が偽、右辺が真',
+                'FF': '両方偽'
+            }
+        elif n_conditions >= 3:
+            for i, pattern in enumerate(patterns[:-1]):  # 最後のFFF以外
+                true_index = pattern.index('T')
+                mcdc_explanation[pattern] = f'条件{true_index + 1}が真、他が偽'
+            mcdc_explanation[patterns[-1]] = '全て偽'
         
         return {
             'type': 'or',
@@ -123,14 +106,13 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
-            'description': f'OR条件（||）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
-            'mcdc_explanation': mcdc_explanation,
-            'has_nested': has_nested
+            'description': f'OR条件（||）- {n_conditions}個の条件',
+            'mcdc_explanation': mcdc_explanation
         }
     
     def _analyze_and_condition(self, condition: Condition) -> Dict:
         """
-        AND条件を分析（ネスト構造対応）
+        AND条件を分析
         
         Args:
             condition: 条件分岐
@@ -144,38 +126,21 @@ class ConditionAnalyzer:
         
         from src.truth_table.mcdc_pattern_generator import MCDCPatternGenerator
         mcdc_gen = MCDCPatternGenerator()
-        
-        # ネスト構造をチェック
-        has_nested = any('||' in cond or '&&' in cond for cond in conditions)
-        
-        if has_nested:
-            # ネスト構造がある場合は新しいメソッドを使用
-            self.logger.info(f"ネストしたAND条件を検出: {len(conditions)}個の条件")
-            patterns = mcdc_gen.generate_mcdc_patterns_for_complex('and', conditions)
-        else:
-            # シンプルなAND条件
-            patterns = mcdc_gen.generate_and_patterns(n_conditions)
+        patterns = mcdc_gen.generate_and_patterns(n_conditions)
         
         # MC/DC説明を生成
         mcdc_explanation = {}
-        if not has_nested:
-            if n_conditions == 2:
-                mcdc_explanation = {
-                    'TF': '左辺が真、右辺が偽',
-                    'FT': '左辺が偽、右辺が真',
-                    'TT': '両方真'
-                }
-            elif n_conditions >= 3:
-                for i, pattern in enumerate(patterns[:-1]):  # 最後のTTT以外
-                    if 'F' in pattern:
-                        false_index = pattern.index('F')
-                        mcdc_explanation[pattern] = f'条件{false_index + 1}が偽、他が真'
-                if patterns:
-                    mcdc_explanation[patterns[-1]] = '全て真'
-        else:
-            # ネスト構造の場合は詳細な説明を生成
-            for i, pattern in enumerate(patterns, 1):
-                mcdc_explanation[pattern] = f'パターン{i}'
+        if n_conditions == 2:
+            mcdc_explanation = {
+                'TF': '左辺が真、右辺が偽',
+                'FT': '左辺が偽、右辺が真',
+                'TT': '両方真'
+            }
+        elif n_conditions >= 3:
+            for i, pattern in enumerate(patterns[:-1]):  # 最後のTTT以外
+                false_index = pattern.index('F')
+                mcdc_explanation[pattern] = f'条件{false_index + 1}が偽、他が真'
+            mcdc_explanation[patterns[-1]] = '全て真'
         
         return {
             'type': 'and',
@@ -185,9 +150,8 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
-            'description': f'AND条件（&&）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
-            'mcdc_explanation': mcdc_explanation,
-            'has_nested': has_nested
+            'description': f'AND条件（&&）- {n_conditions}個の条件',
+            'mcdc_explanation': mcdc_explanation
         }
     
     def _analyze_switch(self, condition: Condition) -> Dict:
@@ -382,3 +346,73 @@ class ConditionAnalyzer:
                 break
         
         return expr
+
+
+if __name__ == "__main__":
+    # ConditionAnalyzerのテスト
+    print("=== ConditionAnalyzer のテスト ===\n")
+    
+    from src.data_structures import Condition, ConditionType
+    
+    analyzer = ConditionAnalyzer()
+    
+    # テスト1: 単純条件
+    print("1. 単純条件のテスト")
+    cond1 = Condition(
+        line=10,
+        type=ConditionType.SIMPLE_IF,
+        expression="(v10 > 30)"
+    )
+    result1 = analyzer.analyze_condition(cond1)
+    print(f"   タイプ: {result1['type']}")
+    print(f"   パターン: {result1['patterns']}")
+    print(f"   テスト値: {result1['test_values']}")
+    print()
+    
+    # テスト2: OR条件
+    print("2. OR条件のテスト")
+    cond2 = Condition(
+        line=15,
+        type=ConditionType.OR_CONDITION,
+        expression="((mx63 == m47) || (mx63 == m46))",
+        operator='or',
+        left="(mx63 == m47)",
+        right="(mx63 == m46)"
+    )
+    result2 = analyzer.analyze_condition(cond2)
+    print(f"   タイプ: {result2['type']}")
+    print(f"   パターン: {result2['patterns']}")
+    print(f"   説明: {result2['mcdc_explanation']}")
+    print()
+    
+    # テスト3: AND条件
+    print("3. AND条件のテスト")
+    cond3 = Condition(
+        line=20,
+        type=ConditionType.AND_CONDITION,
+        expression="((a > 0) && (b < 10))",
+        operator='and',
+        left="(a > 0)",
+        right="(b < 10)"
+    )
+    result3 = analyzer.analyze_condition(cond3)
+    print(f"   タイプ: {result3['type']}")
+    print(f"   パターン: {result3['patterns']}")
+    print(f"   説明: {result3['mcdc_explanation']}")
+    print()
+    
+    # テスト4: switch文
+    print("4. switch文のテスト")
+    cond4 = Condition(
+        line=30,
+        type=ConditionType.SWITCH,
+        expression="v9",
+        cases=['0', '1', '2', 'default']
+    )
+    result4 = analyzer.analyze_condition(cond4)
+    print(f"   タイプ: {result4['type']}")
+    print(f"   パターン: {result4['patterns']}")
+    print(f"   case一覧: {result4['case_list']}")
+    print()
+    
+    print("✓ ConditionAnalyzerが正常に動作しました")

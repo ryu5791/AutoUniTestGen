@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger
 
 
-class MCDCPatternGenerator:
+class MCDCPatternGeneratorV2:
     """MC/DCパターンジェネレータ（シンプル実装版）"""
     
     def __init__(self):
@@ -86,7 +86,7 @@ class MCDCPatternGenerator:
         return patterns
     
     def _extract_or_conditions(self, condition: str) -> List[str]:
-        """OR条件を展開（再帰的）"""
+        """OR条件を展開"""
         # まず外側の括弧を削除
         condition = self._remove_outer_parens(condition)
         
@@ -114,18 +114,8 @@ class MCDCPatternGenerator:
         if current.strip():
             parts.append(current.strip())
         
-        # 各パーツの外側の括弧を削除し、さらにORがあれば再帰的に展開
-        result = []
-        for part in parts:
-            part = self._remove_outer_parens(part)
-            # パートにまだORが含まれる場合は再帰的に展開
-            if '||' in part:
-                sub_parts = self._extract_or_conditions(part)
-                result.extend(sub_parts)
-            else:
-                result.append(part)
-        
-        return result
+        # 各パーツの外側の括弧を削除
+        return [self._remove_outer_parens(p) for p in parts]
     
     def _extract_and_conditions(self, condition: str) -> List[str]:
         """AND条件を展開"""
@@ -453,9 +443,9 @@ class MCDCPatternGenerator:
 
 
 if __name__ == "__main__":
-    print("=== MCDCPatternGenerator v2.6.0 のテスト ===\n")
+    print("=== MCDCPatternGenerator v2.6.1 のテスト ===\n")
     
-    generator = MCDCPatternGenerator()
+    generator = MCDCPatternGeneratorV2()
     
     # テスト: ネストしたAND/OR条件
     print("テスト: A && (B || C || D || E || F || G) && H")
