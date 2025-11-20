@@ -203,11 +203,16 @@ class TestFunctionGenerator:
         # 戻り値がある場合は result 変数を初期化
         if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
             return_type = parsed_data.function_info.return_type
-            # ポインタ型の場合は NULL、それ以外は 0
+            # ポインタ型の場合は NULL、それ以外は 0 または {0}
             if '*' in return_type:
-                lines.append("    result = NULL;")
+                lines.append(f"    {return_type} result = NULL;")
             else:
-                lines.append("    result = 0;")
+                # 構造体や配列の場合は {0}、それ以外は 0
+                # 型名に _t が含まれる、または大文字で始まる場合は構造体と判断
+                if '_t' in return_type or (return_type and return_type[0].isupper()):
+                    lines.append(f"    {return_type} result = {{0}};")
+                else:
+                    lines.append(f"    {return_type} result = 0;")
         
         # パラメータの初期化
         if parsed_data.function_info and parsed_data.function_info.parameters:

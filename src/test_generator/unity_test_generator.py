@@ -117,9 +117,9 @@ class UnityTestGenerator:
         parts = [source_code]
         
         # 区切り線を追加
-        parts.append("\n\n" + "=" * 80)
-        parts.append("/* 以下、自動生成されたテストコード */")
-        parts.append("=" * 80 + "\n")
+        parts.append("\n\n" + "//" + "=" * 78)
+        parts.append("// 以下、自動生成されたテストコード")
+        parts.append("//" + "=" * 78 + "\n")
         
         # Unity framework のインクルード
         parts.append('#include "unity.h"')
