@@ -510,21 +510,27 @@ class TestFunctionGenerator:
             モック設定コード
         """
         lines = []
-        lines.append("    // モックを設定")
         
         if not parsed_data.external_functions:
-            lines.append("")
-            return '\n'.join(lines)
+            return ""
         
-        # 外部関数のモック戻り値を設定
+        # 外部関数のモック戻り値を設定（デフォルト値以外のみ）
+        mock_settings = []
         for func_name in parsed_data.external_functions:
             # 戻り値を決定
             return_value = self._determine_mock_return_value(
                 func_name, test_case, parsed_data
             )
-            lines.append(f"    mock_{func_name}_return_value = {return_value};")
+            # デフォルト値（0）以外の場合のみ設定コードを追加
+            if return_value != "0":
+                mock_settings.append(f"    mock_{func_name}_return_value = {return_value};")
         
-        lines.append("")
+        # 設定が必要なモックがある場合のみコメントとコードを追加
+        if mock_settings:
+            lines.append("    // モックを設定")
+            lines.extend(mock_settings)
+            lines.append("")
+        
         return '\n'.join(lines)
     
     def _determine_mock_return_value(self, func_name: str, test_case: TestCase, 
