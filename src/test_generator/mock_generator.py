@@ -106,11 +106,11 @@ class MockGenerator:
         lines = ["// ===== モック・スタブ用グローバル変数 ====="]
         
         for mock_func in self.mock_functions:
-            # 戻り値変数
-            lines.append(f"static {mock_func.return_type} {mock_func.return_variable} = 0;")
+            # 戻り値変数（初期化はsetUp()で実施）
+            lines.append(f"static {mock_func.return_type} {mock_func.return_variable};")
             
-            # 呼び出し回数カウンタ
-            lines.append(f"static int {mock_func.call_count_variable} = 0;")
+            # 呼び出し回数カウンタ（初期化はsetUp()で実施）
+            lines.append(f"static int {mock_func.call_count_variable};")
             
             lines.append("")
         
