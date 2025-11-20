@@ -105,7 +105,7 @@ class TestCode:
         return '\n\n'.join(p for p in parts if p)
     
     def save(self, filepath: str) -> None:
-        with open(filepath, 'w', encoding='utf-8') as f:
+        with open(filepath, 'w', encoding='shift_jis') as f:
             f.write(self.to_string())
 
 
