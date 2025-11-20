@@ -1,773 +1,454 @@
-# AutoUniTestGen v2.4.4 - シーケンス図
+# C言語単体テスト自動生成ツール - シーケンス図 v2.6.0
 
-**バージョン**: v2.4.4  
-**最終更新**: 2025-11-19  
-**対応機能**: スタンドアロンモード、フォールバックモード、標準型外部ファイル化、バージョン動的取得
-
----
-
-## 目次
-
-1. [全体処理フロー（v2.4.3対応）](#1-全体処理フローv243対応)
-2. [CCodeParser詳細（フォールバックモード対応）](#2-ccodeparser詳細フォールバックモード対応)
-3. [UnityTestGenerator詳細（スタンドアロンモード対応）](#3-unitytestgenerator詳細スタンドアロンモード対応)
-4. [TruthTableGenerator詳細](#4-truthtablegenerator詳細)
-5. [IOTableGenerator詳細](#5-iotablegenerator詳細)
-6. [フォールバックモード詳細](#6-フォールバックモード詳細)
-7. [スタンドアロンモード詳細](#7-スタンドアロンモード詳細)
-8. [TypedefExtractor詳細（v2.4.4対応）](#8-typedefextractor詳細v244対応) ← 🆕 更新
-9. [CLI起動フロー（v2.4.4対応）](#9-cli起動フローv244対応) ← 🆕 新規
+**更新日**: 2025-11-19  
+**バージョン**: v2.6.0  
+**主な変更**: ネストしたAND/OR条件のMC/DC処理フロー追加
 
 ---
 
-## 1. 全体処理フロー（v2.4.3対応）
+## 1. 全体処理フロー
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant CLI
-    participant Main as CTestAutoGenerator
+    participant Main as メインプログラム
     participant Parser as CCodeParser
     participant TruthTable as TruthTableGenerator
     participant TestGen as UnityTestGenerator
     participant IOTable as IOTableGenerator
     participant Excel as ExcelWriter
 
-    User->>CLI: python main.py -i source.c -f func
-    CLI->>CLI: 引数解析
-    Note over CLI: standalone_mode = True (デフォルト)
+    User->>Main: C言語ファイルを指定
+    Main->>Parser: parse(c_file_path)
     
-    CLI->>Main: generate_all(c_file_path, target_function)
+    Note over Parser: C言語ファイルを解析
+    Parser->>Parser: プリプロセス処理
+    Parser->>Parser: AST生成
+    Parser->>Parser: 関数抽出
+    Parser->>Parser: 条件分岐抽出（ネスト対応）
+    Parser-->>Main: ParsedData(関数情報, 条件分岐リスト)
     
-    Note over Main: Step 1/4: C言語ファイルを解析
-    Main->>Parser: parse(c_file_path, target_function)
-    
-    alt AST解析成功（通常モード）
-        Parser->>Parser: プリプロセス処理
-        Parser->>Parser: AST生成
-        Parser->>Parser: 条件分岐抽出（成功）
-        Parser-->>Main: ParsedData(conditions: 多数)
-    else AST解析失敗（フォールバックモード）
-        Parser->>Parser: プリプロセス処理
-        Parser->>Parser: AST生成失敗
-        Note over Parser: フォールバックモード発動
-        Parser->>Parser: マクロ抽出（正規表現）
-        Parser->>Parser: 型定義抽出（正規表現）
-        Parser->>Parser: 条件分岐抽出（未実装）
-        Parser-->>Main: ParsedData(conditions: 0個)
-    end
-    
-    Note over Main: Step 2/4: MC/DC真偽表を生成
     Main->>TruthTable: generate(parsed_data)
-    TruthTable->>TruthTable: 条件分析
-    TruthTable->>TruthTable: MC/DCパターン生成
+    Note over TruthTable: MC/DC真偽表を生成（v2.6.0拡張）
+    TruthTable->>TruthTable: if文解析
+    TruthTable->>TruthTable: ネスト構造検出
+    TruthTable->>TruthTable: OR/AND条件再帰展開
+    TruthTable->>TruthTable: switch-case抽出
+    TruthTable->>TruthTable: MC/DCパターン生成（100%）
     TruthTable-->>Main: TruthTableData
     
-    Main->>Excel: write_truth_table(truth_table)
+    Main->>Excel: write_truth_table(table_data)
+    Excel->>Excel: Excelフォーマット作成
     Excel-->>Main: truth_table.xlsx
     
-    Note over Main: Step 3/4: Unityテストコード生成
-    Main->>Main: source_codeを読み込み
+    Main->>TestGen: generate(truth_table, parsed_data)
+    Note over TestGen: Unityテストコード生成
+    TestGen->>TestGen: モック/スタブ生成
+    TestGen->>TestGen: テスト関数生成
+    TestGen->>TestGen: プロトタイプ宣言生成
+    TestGen->>TestGen: コメント生成
+    TestGen-->>Main: TestCode
     
-    alt スタンドアロンモード（v2.4.3）
-        Main->>TestGen: generate_standalone(truth_table, parsed_data, source_code)
-        TestGen->>TestGen: 元のソース全体をコピー
-        TestGen->>TestGen: 区切り線を追加
-        TestGen->>TestGen: モック生成
-        TestGen->>TestGen: テスト関数生成
-        TestGen->>TestGen: setUp/tearDown生成
-        TestGen->>TestGen: main関数生成
-        TestGen->>TestGen: 全体を統合
-        TestGen-->>Main: standalone_code (string)
-        Main->>Main: ファイルに保存
-    else 従来モード
-        Main->>TestGen: generate(truth_table, parsed_data, source_code)
-        TestGen-->>Main: TestCode
-        Main->>TestGen: save(output_path)
-    end
+    Main->>TestGen: save(output_path)
+    TestGen-->>Main: test_generated.c
     
-    Note over Main: Step 4/4: I/O表を生成
     Main->>IOTable: generate(test_code, truth_table)
+    Note over IOTable: I/O一覧表を生成
     IOTable->>IOTable: 入力変数抽出
     IOTable->>IOTable: 出力変数抽出
+    IOTable->>IOTable: テストケース毎の値設定
     IOTable-->>Main: IOTableData
     
-    Main->>Excel: write_io_table(io_table)
+    Main->>Excel: write_io_table(io_table_data)
     Excel-->>Main: io_table.xlsx
     
-    Main-->>CLI: 成功
-    CLI-->>User: 完了（3ファイル生成）
+    Main-->>User: 完了通知（3ファイル生成）
 ```
 
 ---
 
-## 2. CCodeParser詳細（フォールバックモード対応）
+## 2. CCodeParser詳細シーケンス
 
 ```mermaid
 sequenceDiagram
-    participant Main as CTestAutoGenerator
+    participant Main as メインプログラム
     participant Parser as CCodeParser
-    participant Preproc as Preprocessor
-    participant ASTBuilder
-    participant CondExt as ConditionExtractor
-    participant TypedefExt as TypedefExtractor
-    participant SourceExt as SourceDefinitionExtractor
+    participant Preprocessor as Preprocessor
+    participant ASTBuilder as ASTBuilder
+    participant CondExtractor as ConditionExtractor
 
-    Main->>Parser: parse(c_file_path, target_function)
+    Main->>Parser: parse(c_file_path)
+    Parser->>Preprocessor: preprocess(c_code)
     
-    Note over Parser: ファイル読み込み
-    Parser->>Parser: _read_file(c_file_path)
+    Note over Preprocessor: プリプロセス処理
+    Preprocessor->>Preprocessor: #includeの展開（制限付き）
+    Preprocessor->>Preprocessor: #defineの処理
+    Preprocessor->>Preprocessor: コメント削除
+    Preprocessor-->>Parser: preprocessed_code
     
-    Note over Parser: 前処理
-    Parser->>Preproc: preprocess(source_code)
-    Preproc->>Preproc: マクロ定義を抽出
-    Preproc->>Preproc: コメント除去
-    Preproc->>Preproc: ビットフィールド情報抽出
-    Preproc-->>Parser: PreprocessedData
+    Parser->>ASTBuilder: build_ast(preprocessed_code)
+    Note over ASTBuilder: pycparserでAST構築
+    ASTBuilder->>ASTBuilder: fake_libc_includeを使用
+    ASTBuilder->>ASTBuilder: parse_file()
+    ASTBuilder-->>Parser: ast
     
-    Note over Parser: AST構築を試行
-    Parser->>ASTBuilder: build_ast(preprocessed)
+    Parser->>CondExtractor: extract_conditions(ast)
+    Note over CondExtractor: 条件分岐を抽出
+    CondExtractor->>CondExtractor: visit_FuncDef()
+    CondExtractor->>CondExtractor: visit_If()
+    CondExtractor->>CondExtractor: visit_Switch()
+    CondExtractor->>CondExtractor: _analyze_binary_op()
+    CondExtractor->>CondExtractor: _extract_all_conditions()
+    Note over CondExtractor: v2.6.0: ネスト条件を再帰的に抽出
+    CondExtractor-->>Parser: conditions_list
     
-    alt AST構築成功
-        ASTBuilder-->>Parser: ast
-        
-        Note over Parser: 型定義抽出（v2.4.4）
-        Parser->>TypedefExt: extract_typedefs(ast, source_code)
-        Note over TypedefExt: standard_types.hから標準型読み込み
-        TypedefExt-->>Parser: List[TypedefInfo]
-        
-        Note over Parser: 関数情報抽出
-        Parser->>Parser: _extract_function_info(ast)
-        
-        Note over Parser: 条件分岐抽出
-        Parser->>CondExt: extract_conditions(ast, function_name)
-        CondExt-->>Parser: List[Condition]
-        
-        Parser-->>Main: ParsedData(success=True, conditions=多数)
-        
-    else AST構築失敗
-        ASTBuilder-->>Parser: Exception
-        
-        Note over Parser: ⚠️ フォールバックモード
-        Parser->>Parser: _handle_fallback_mode(source_code)
-        
-        Note over Parser: マクロ抽出
-        Parser->>SourceExt: extract_macros(source_code)
-        SourceExt-->>Parser: List[MacroDefinition]
-        
-        Note over Parser: 型定義抽出
-        Parser->>SourceExt: extract_typedefs(source_code)
-        SourceExt-->>Parser: List[TypedefInfo]
-        
-        Note over Parser: 条件分岐は抽出できない
-        Parser->>Parser: conditions = []
-        
-        Parser-->>Main: ParsedData(success=False, conditions=0個)
-    end
+    Parser-->>Main: ParsedData
 ```
 
 ---
 
-## 3. UnityTestGenerator詳細（スタンドアロンモード対応）
+## 3. TruthTableGenerator詳細シーケンス（v2.6.0拡張）
 
 ```mermaid
 sequenceDiagram
-    participant Main as CTestAutoGenerator
-    participant TestGen as UnityTestGenerator
-    participant MockGen as MockGenerator
-    participant TestFuncGen as TestFunctionGenerator
-    participant ProtoGen as PrototypeGenerator
-    participant CommentGen as CommentGenerator
-    participant CodeExt as CodeExtractor
-
-    Main->>TestGen: generate_standalone(truth_table, parsed_data, source_code)
-    
-    Note over TestGen: v2.4.3: スタンドアロンモード
-    
-    Note over TestGen: Step 1: 元のソースコード全体をコピー
-    TestGen->>TestGen: standalone_code = source_code
-    
-    Note over TestGen: Step 2: 区切り線を追加
-    TestGen->>TestGen: standalone_code += separator
-    
-    Note over TestGen: Step 3: 型定義を生成
-    TestGen->>TestGen: _generate_type_definitions(parsed_data)
-    TestGen->>TestGen: standalone_code += typedef_section
-    
-    Note over TestGen: Step 4: プロトタイプ宣言を生成
-    TestGen->>ProtoGen: generate_prototypes(parsed_data)
-    ProtoGen-->>TestGen: prototype_declarations
-    TestGen->>TestGen: standalone_code += prototypes
-    
-    Note over TestGen: Step 5: モック/スタブを生成
-    TestGen->>MockGen: generate(parsed_data)
-    MockGen->>MockGen: 外部関数呼び出しを検出
-    MockGen->>MockGen: モック関数生成
-    MockGen-->>TestGen: mock_code
-    TestGen->>TestGen: standalone_code += mocks
-    
-    Note over TestGen: Step 6: テスト関数を生成
-    TestGen->>TestFuncGen: generate_all(truth_table, parsed_data)
-    
-    loop 各テストケース
-        TestFuncGen->>CommentGen: generate(test_case)
-        CommentGen-->>TestFuncGen: comment
-        
-        TestFuncGen->>TestFuncGen: 入力値設定コード生成
-        TestFuncGen->>TestFuncGen: 関数呼び出しコード生成
-        TestFuncGen->>TestFuncGen: 期待値検証コード生成
-        TestFuncGen->>TestFuncGen: test_function_N()を生成
-    end
-    
-    TestFuncGen-->>TestGen: all_test_functions
-    TestGen->>TestGen: standalone_code += test_functions
-    
-    Note over TestGen: Step 7: setUp/tearDownを生成
-    TestGen->>TestGen: _generate_setup_teardown()
-    TestGen->>TestGen: standalone_code += setup_teardown
-    
-    Note over TestGen: Step 8: main関数を生成
-    TestGen->>TestGen: _generate_main_function(truth_table, parsed_data)
-    TestGen->>TestGen: UNITY_BEGIN()
-    
-    loop 各テスト関数
-        TestGen->>TestGen: RUN_TEST(test_function_N)
-    end
-    
-    TestGen->>TestGen: UNITY_END()
-    TestGen->>TestGen: standalone_code += main_function
-    
-    TestGen-->>Main: standalone_code (完全なテストコード)
-```
-
----
-
-## 4. TruthTableGenerator詳細
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
+    participant Main as メインプログラム
     participant TruthGen as TruthTableGenerator
     participant CondAnalyzer as ConditionAnalyzer
     participant MCDCGen as MCDCPatternGenerator
 
     Main->>TruthGen: generate(parsed_data)
     
-    Note over TruthGen: 条件式がない場合
-    alt conditions.length == 0
-        TruthGen->>TruthGen: 空の真偽表を生成
-        TruthGen-->>Main: TruthTableData(test_cases=[])
-    end
-    
-    Note over TruthGen: 条件式がある場合
-    loop 各条件式
-        TruthGen->>CondAnalyzer: analyze(condition)
-        CondAnalyzer->>CondAnalyzer: 基本条件を抽出
-        CondAnalyzer->>CondAnalyzer: 演算子を解析
-        CondAnalyzer-->>TruthGen: ConditionInfo
+    loop 各条件分岐
+        TruthGen->>CondAnalyzer: analyze_condition(cond)
         
-        TruthGen->>MCDCGen: generate_patterns(condition_info)
-        MCDCGen->>MCDCGen: MC/DCカバレッジ計算
-        MCDCGen->>MCDCGen: 独立ペアを生成
-        MCDCGen-->>TruthGen: List[TestPattern]
+        alt 単純if文
+            CondAnalyzer->>CondAnalyzer: 条件式解析
+            CondAnalyzer-->>TruthGen: {type: "simple", pattern: ["T", "F"]}
         
-        loop 各パターン
-            TruthGen->>TruthGen: _format_table_row(condition, pattern)
-            TruthGen->>TruthGen: test_case = TestCase(...)
-        end
-    end
-    
-    Note over TruthGen: 期待値を設定
-    TruthGen->>TruthGen: _set_expected_values(test_cases)
-    
-    TruthGen-->>Main: TruthTableData(test_cases=...)
-```
-
----
-
-## 5. IOTableGenerator詳細
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
-    participant IOGen as IOTableGenerator
-    participant VarExt as VariableExtractor
-
-    Main->>IOGen: generate(test_code, truth_table)
-    
-    Note over IOGen: 入力変数を抽出
-    IOGen->>VarExt: extract_input_variables(test_code)
-    VarExt->>VarExt: 関数の引数を解析
-    VarExt->>VarExt: グローバル変数を検出
-    VarExt-->>IOGen: List[Variable]
-    
-    Note over IOGen: 出力変数を抽出
-    IOGen->>VarExt: extract_output_variables(test_code)
-    VarExt->>VarExt: 戻り値を解析
-    VarExt->>VarExt: 参照渡しパラメータを検出
-    VarExt->>VarExt: グローバル変数の変更を検出
-    VarExt-->>IOGen: List[Variable]
-    
-    Note over IOGen: テストケースごとにマッピング
-    loop 各テストケース
-        IOGen->>IOGen: _map_test_to_values(test_case)
+        else OR条件（シンプル）
+            CondAnalyzer->>CondAnalyzer: 条件数を確認
+            CondAnalyzer->>MCDCGen: generate_or_patterns(n)
+            MCDCGen-->>CondAnalyzer: ["TF", "FT", "FF"]
+            CondAnalyzer-->>TruthGen: {type: "or", pattern: [...]}
         
-        loop 各入力変数
-            IOGen->>IOGen: 値を取得
-        end
+        else AND条件（シンプル）
+            CondAnalyzer->>CondAnalyzer: 条件数を確認
+            CondAnalyzer->>MCDCGen: generate_and_patterns(n)
+            MCDCGen-->>CondAnalyzer: ["TF", "FT", "TT"]
+            CondAnalyzer-->>TruthGen: {type: "and", pattern: [...]}
         
-        loop 各出力変数
-            IOGen->>IOGen: 期待値を取得
-        end
-        
-        IOGen->>IOGen: io_row = IOTableRow(...)
-    end
-    
-    IOGen-->>Main: IOTableData(rows=...)
-```
-
----
-
-## 6. フォールバックモード詳細
-
-```mermaid
-sequenceDiagram
-    participant Parser as CCodeParser
-    participant ASTBuilder
-    participant SourceExt as SourceDefinitionExtractor
-    participant MacroExt as MacroExtractor
-    participant TypedefExt as TypedefExtractor (Regex)
-
-    Note over Parser: AST構築失敗後
-    Parser->>Parser: _handle_fallback_mode(source_code)
-    
-    Note over Parser: ⚠️ フォールバックモード開始
-    Parser->>Parser: logger.warning("フォールバックモード")
-    
-    Note over Parser: マクロ定義を抽出
-    Parser->>SourceExt: extract_macros(source_code)
-    SourceExt->>MacroExt: find_all_macros()
-    
-    loop 各行
-        MacroExt->>MacroExt: 正規表現マッチ
-        MacroExt->>MacroExt: #define パターン
-        MacroExt->>MacroExt: MacroDefinition作成
-    end
-    
-    MacroExt-->>SourceExt: List[MacroDefinition]
-    SourceExt-->>Parser: マクロ情報
-    
-    Note over Parser: 型定義を抽出
-    Parser->>SourceExt: extract_typedefs(source_code)
-    SourceExt->>TypedefExt: find_all_typedefs()
-    
-    loop 各行
-        TypedefExt->>TypedefExt: 正規表現マッチ
-        TypedefExt->>TypedefExt: typedef struct/union/enum パターン
-        TypedefExt->>TypedefExt: TypedefInfo作成
-    end
-    
-    TypedefExt-->>SourceExt: List[TypedefInfo]
-    SourceExt-->>Parser: 型定義情報
-    
-    Note over Parser: 条件分岐は抽出できない
-    Parser->>Parser: conditions = []
-    Note over Parser: ⚠️ 真偽表は空になる
-    
-    Note over Parser: ParsedDataを作成
-    Parser->>Parser: ParsedData(
-    Parser->>Parser:   conditions=[],
-    Parser->>Parser:   macro_defs=...,
-    Parser->>Parser:   type_defs=...,
-    Parser->>Parser:   success=False
-    Parser->>Parser: )
-    
-    Parser-->>Parser: フォールバックモード完了
-```
-
----
-
-## 7. スタンドアロンモード詳細
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
-    participant TestGen as UnityTestGenerator
-    participant File
-
-    Note over Main: v2.4.3: スタンドアロンモード
-    
-    Main->>TestGen: generate_standalone(truth_table, parsed_data, source_code)
-    
-    Note over TestGen: 1. 元のソースをコピー
-    TestGen->>TestGen: code = source_code
-    
-    Note over TestGen: 2. 区切り線
-    TestGen->>TestGen: code += "\\n\\n"
-    TestGen->>TestGen: code += "/* ========== TEST CODE ========== */"
-    
-    Note over TestGen: 3. Unity インクルード
-    TestGen->>TestGen: code += "#include \\"unity.h\\""
-    
-    Note over TestGen: 4. 型定義
-    TestGen->>TestGen: code += type_definitions
-    
-    Note over TestGen: 5. プロトタイプ宣言
-    TestGen->>TestGen: code += prototypes
-    
-    Note over TestGen: 6. モック/スタブ
-    TestGen->>TestGen: code += mocks
-    
-    Note over TestGen: 7. テスト関数
-    TestGen->>TestGen: code += test_functions
-    
-    Note over TestGen: 8. setUp/tearDown
-    TestGen->>TestGen: code += "void setUp(void) {}"
-    TestGen->>TestGen: code += "void tearDown(void) {}"
-    
-    Note over TestGen: 9. main関数
-    TestGen->>TestGen: code += "int main(void) {"
-    TestGen->>TestGen: code += "    UNITY_BEGIN();"
-    
-    loop 各テスト関数
-        TestGen->>TestGen: code += "    RUN_TEST(test_N);"
-    end
-    
-    TestGen->>TestGen: code += "    return UNITY_END();"
-    TestGen->>TestGen: code += "}"
-    
-    TestGen-->>Main: standalone_code
-    
-    Note over Main: ファイルに保存
-    Main->>File: write(output_path, standalone_code)
-    
-    Note over Main: ✓ 1つのファイルで完結
-    Note over Main: ✓ 即座にコンパイル可能
-```
-
----
-
-## 8. TypedefExtractor詳細（v2.4.4対応）
-
-```mermaid
-sequenceDiagram
-    participant Parser as CCodeParser
-    participant TypedefExt as TypedefExtractor
-    participant StdTypesFile as standard_types.h
-    participant AST
-
-    Note over TypedefExt: 初期化時（v2.4.4）
-    Parser->>TypedefExt: new TypedefExtractor()
-    TypedefExt->>TypedefExt: __init__()
-    TypedefExt->>TypedefExt: _load_standard_types()
-    
-    Note over TypedefExt: standard_types.hを読み込む
-    TypedefExt->>StdTypesFile: open & read
-    
-    loop 各行
-        TypedefExt->>TypedefExt: 正規表現マッチ
-        TypedefExt->>TypedefExt: r'typedef\\s+.*\\s+(\\w+)\\s*;'
-        TypedefExt->>TypedefExt: type_name.add()
-    end
-    
-    alt ファイル読み込み成功
-        StdTypesFile-->>TypedefExt: 34個の標準型
-        Note over TypedefExt: ✓ 34個の標準型を読み込み
-        TypedefExt->>TypedefExt: logger.info("34個の標準型を読み込みました")
-    else ファイルが見つからない
-        Note over TypedefExt: ⚠️ フォールバック
-        TypedefExt->>TypedefExt: logger.warning("not found, using fallback")
-        TypedefExt->>TypedefExt: 最小セット（14個）を使用
-    end
-    
-    TypedefExt->>TypedefExt: self.standard_types = types
-    TypedefExt-->>Parser: TypedefExtractor (初期化完了)
-    
-    Note over Parser,TypedefExt: 解析時
-    Parser->>TypedefExt: extract_typedefs(ast, source_code)
-    
-    Note over TypedefExt: ASTを巡回
-    TypedefExt->>AST: visit nodes
-    
-    loop 各typedef宣言
-        AST-->>TypedefExt: typedef node
-        
-        TypedefExt->>TypedefExt: _extract_typedef_node(node)
-        
-        Note over TypedefExt: 型名を取得
-        TypedefExt->>TypedefExt: name = node.name
-        
-        Note over TypedefExt: 型の種類を判定
-        TypedefExt->>TypedefExt: typedef_type = 'struct'/'union'/'enum'/'basic'
-        
-        TypedefExt->>TypedefExt: _extract_definition_from_source(name, typedef_type)
-        
-        alt 標準型チェック (v2.4.4)
-            Note over TypedefExt: self.standard_typesから判定
-            TypedefExt->>TypedefExt: if name in self.standard_types
-            TypedefExt->>TypedefExt: return "typedef /* standard */ {name};"
-            Note over TypedefExt: ⭐ 警告を出さない
+        else ネストしたAND条件 (v2.6.0)
+            CondAnalyzer->>CondAnalyzer: ネスト構造を検出
+            Note over CondAnalyzer: has_nested = True
+            CondAnalyzer->>MCDCGen: generate_mcdc_patterns_for_complex('and', conditions)
             
-        else ユーザー定義型
-            Note over TypedefExt: ソースから定義を抽出
+            Note over MCDCGen: 新機能: 複雑条件の処理
+            MCDCGen->>MCDCGen: _extract_or_conditions() 再帰的展開
+            MCDCGen->>MCDCGen: _extract_and_conditions() 再帰的展開
+            MCDCGen->>MCDCGen: 構造情報を構築
+            Note over MCDCGen: structure = [('simple',1), ('or',6), ('simple',1)]
             
-            alt 定義が見つかった
-                TypedefExt->>TypedefExt: パターンマッチング
-                TypedefExt->>TypedefExt: return 完全な定義
-                
-            else 定義が見つからない
-                Note over TypedefExt: ⚠️ 警告を出力
-                TypedefExt->>TypedefExt: logger.warning()
-                TypedefExt->>TypedefExt: return "typedef /* unknown */ {name};"
+            MCDCGen->>MCDCGen: _generate_patterns_for_structure()
+            
+            loop 各条件グループ
+                alt ORグループ
+                    MCDCGen->>MCDCGen: _generate_or_group_patterns_with_structure()
+                    Note over MCDCGen: 各OR条件を1つずつTrueに
+                else 単純条件
+                    MCDCGen->>MCDCGen: _generate_simple_condition_patterns_with_structure()
+                    Note over MCDCGen: 独立性テストパターン生成
+                end
             end
+            
+            MCDCGen->>MCDCGen: 重複パターンを削除
+            MCDCGen-->>CondAnalyzer: ["TTFFFFFT", "FTFFFFFT", ...]
+            Note over MCDCGen: MC/DC 100%のパターン
+            CondAnalyzer-->>TruthGen: {type: "and", pattern: [...], has_nested: true}
+        
+        else ネストしたOR条件 (v2.6.0)
+            CondAnalyzer->>CondAnalyzer: ネスト構造を検出
+            CondAnalyzer->>MCDCGen: generate_mcdc_patterns_for_complex('or', conditions)
+            MCDCGen->>MCDCGen: 再帰的展開とパターン生成
+            MCDCGen-->>CondAnalyzer: MC/DCパターン
+            CondAnalyzer-->>TruthGen: {type: "or", pattern: [...], has_nested: true}
+        
+        else switch文
+            CondAnalyzer->>CondAnalyzer: case文を全抽出
+            CondAnalyzer-->>TruthGen: {type: "switch", cases: [0,1,2,...]}
         end
-        
-        Note over TypedefExt: 依存関係を検出
-        TypedefExt->>TypedefExt: _find_dependencies(definition)
-        
-        Note over TypedefExt: TypedefInfoを作成
-        TypedefExt->>TypedefExt: TypedefInfo(name, type, def, deps, line)
     end
     
-    Note over TypedefExt: 標準型をフィルタリング
-    TypedefExt->>TypedefExt: _filter_standard_typedefs()
-    
-    TypedefExt-->>Parser: List[TypedefInfo]
+    TruthGen->>TruthGen: 真偽表データ構築
+    TruthGen->>TruthGen: テスト番号採番
+    TruthGen-->>Main: TruthTableData
 ```
-
-### 図8の説明（v2.4.4更新）
-
-**v2.4.4の改善点:**
-
-1. **standard_types.hからの動的読み込み**
-   ```python
-   def _load_standard_types(self) -> Set[str]:
-       """standard_types.hから標準型を読み込む"""
-       base_path = os.path.dirname(os.path.abspath(__file__))
-       std_types_path = os.path.join(base_path, '../../standard_types.h')
-       
-       standard_types = set()
-       
-       try:
-           with open(std_types_path, 'r', encoding='utf-8') as f:
-               for line in f:
-                   match = re.search(r'typedef\s+.*\s+(\w+)\s*;', line)
-                   if match:
-                       type_name = match.group(1)
-                       standard_types.add(type_name)
-           
-           self.logger.info(f"standard_types.hから{len(standard_types)}個の標準型を読み込みました")
-           
-       except FileNotFoundError:
-           # フォールバック: 最小限の標準型
-           standard_types = { ... }
-       
-       return standard_types
-   ```
-
-2. **メリット**
-   - ハードコードを排除
-   - `standard_types.h` を編集するだけで標準型を追加可能
-   - フォールバック機能で安全性確保
-
-3. **読み込まれる標準型（34種類）**
-   ```
-   int8_t ~ uint64_t (8種類)
-   int_least8_t ~ uint_least64_t (8種類)
-   int_fast8_t ~ uint_fast64_t (8種類)
-   intmax_t, uintmax_t, intptr_t, uintptr_t
-   size_t, ssize_t, ptrdiff_t, wchar_t, wint_t, bool
-   ```
-
-4. **処理の流れ**
-   ```
-   初期化時
-     ├─ standard_types.h読み込み試行
-     ├─ 成功 → 34個の標準型をロード
-     └─ 失敗 → フォールバック（14個の最小セット）
-   
-   解析時
-     ├─ 標準型チェック (self.standard_types)
-     ├─ Yes → 簡易定義を返す（警告なし）
-     └─ No  → 通常の抽出処理
-              ├─ 成功 → 完全な定義
-              └─ 失敗 → 警告 + 簡易定義
-   ```
 
 ---
 
-## 9. CLI起動フロー（v2.4.4対応）
+## 4. MCDCPatternGenerator詳細シーケンス（v2.6.0新規）
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant CLI
-    participant GetVer as get_version()
-    participant VERSIONFile as VERSION
-    participant Main as CTestAutoGenerator
+    participant Analyzer as ConditionAnalyzer
+    participant MCDC as MCDCPatternGenerator
+    participant Extractor as 条件展開メソッド
+    participant Generator as パターン生成メソッド
 
-    Note over User,CLI: プログラム起動
-    User->>CLI: python main.py [options]
+    Analyzer->>MCDC: generate_mcdc_patterns_for_complex('and', conditions)
     
-    Note over CLI: モジュールロード時（v2.4.4）
-    CLI->>GetVer: get_version()
-    GetVer->>VERSIONFile: open & read
-    
-    alt ファイル読み込み成功
-        VERSIONFile-->>GetVer: "2.4.4"
-        GetVer->>GetVer: strip()
-        GetVer-->>CLI: "2.4.4"
-        CLI->>CLI: VERSION = "2.4.4"
-        Note over CLI: ✓ バージョン設定完了
-    else ファイルが見つからない
-        Note over GetVer: ⚠️ エラーハンドリング
-        GetVer->>GetVer: return "unknown"
-        GetVer-->>CLI: "unknown"
-        CLI->>CLI: VERSION = "unknown"
+    Note over MCDC: Step 1: 条件を展開
+    loop 各条件
+        MCDC->>MCDC: 条件の種類を判定
+        
+        alt OR条件を含む
+            MCDC->>Extractor: _extract_or_conditions(cond)
+            Extractor->>Extractor: 外側の括弧を削除
+            Extractor->>Extractor: ORで分割
+            
+            loop 各パーツ
+                alt パーツにORが残っている
+                    Extractor->>Extractor: 再帰的に_extract_or_conditions()
+                    Note over Extractor: ネスト構造を完全展開
+                end
+            end
+            
+            Extractor-->>MCDC: [cond1, cond2, ..., condN]
+        
+        else AND条件を含む
+            MCDC->>Extractor: _extract_and_conditions(cond)
+            Extractor->>Extractor: 再帰的にAND展開
+            Extractor-->>MCDC: [cond1, cond2, ..., condN]
+        
+        else 単純条件
+            MCDC->>MCDC: そのまま追加
+        end
+        
+        MCDC->>MCDC: 構造情報を記録
+        Note over MCDC: structure.append((type, count))
     end
     
-    Note over CLI: コマンドライン引数解析
-    CLI->>CLI: create_parser()
-    CLI->>CLI: parse_args()
+    Note over MCDC: Step 2: パターン生成
+    MCDC->>Generator: _generate_patterns_for_structure(structure)
     
-    alt --versionオプション
-        User->>CLI: --version
-        CLI->>CLI: print(VERSION)
-        CLI-->>User: c-test-gen 2.4.4
-        Note over CLI: プログラム終了
-    else 通常処理
-        CLI->>CLI: validate_args()
-        CLI->>Main: generate_all(...)
-        Note over Main: テスト生成処理
-        Main-->>CLI: 成功
-        CLI-->>User: 完了メッセージ
+    loop 各条件グループ
+        alt ORグループ
+            Generator->>Generator: _generate_or_group_patterns_with_structure()
+            Note over Generator: パターン1: 全てFalse
+            Note over Generator: パターン2-N: 各条件を1つずつTrue
+            Generator->>Generator: ベースパターンを作成
+            Note over Generator: _create_base_pattern_for_and()
+        
+        else AND条件
+            Generator->>Generator: _generate_and_group_patterns()
+            Note over Generator: 各条件を1つずつFalse
+        
+        else 単純条件
+            Generator->>Generator: _generate_simple_condition_patterns_with_structure()
+            Note over Generator: 独立性テストのペア
+        end
+        
+        Generator->>Generator: パターンをSetに追加
+        Note over Generator: 重複を自動除去
     end
+    
+    Generator-->>MCDC: patterns_set
+    
+    MCDC->>MCDC: パターンをソート
+    MCDC->>MCDC: 文字列に変換
+    Note over MCDC: ["TTFFFFFT", "FTFFFFFT", ...]
+    
+    MCDC-->>Analyzer: MC/DCパターンリスト
 ```
 
-### 図9の説明（v2.4.4新規）
+---
 
-**v2.4.4の新機能:**
+## 5. UnityTestGenerator詳細シーケンス
 
-1. **バージョン動的取得**
-   ```python
-   def get_version() -> str:
-       """VERSIONファイルからバージョンを取得"""
-       try:
-           version_file = Path(__file__).resolve().parent.parent / 'VERSION'
-           with open(version_file, 'r', encoding='utf-8') as f:
-               return f.read().strip()
-       except FileNotFoundError:
-           return "unknown"
-       except Exception as e:
-           print(f"Warning: Failed to read VERSION file: {e}", file=sys.stderr)
-           return "unknown"
-   
-   VERSION = get_version()
-   ```
+```mermaid
+sequenceDiagram
+    participant Main as メインプログラム
+    participant TestGen as UnityTestGenerator
+    participant MockGen as MockGenerator
+    participant TestFuncGen as TestFunctionGenerator
+    participant CommentGen as CommentGenerator
 
-2. **メリット**
-   - VERSIONファイル編集のみでバージョン更新
-   - コード修正不要
-   - 単一の真実の源（Single Source of Truth）
-
-3. **エラーハンドリング**
-   - ファイルが見つからない場合: "unknown" を返す
-   - その他のエラー: 警告を出力して "unknown" を返す
-
-4. **使用例**
-   ```bash
-   $ cat VERSION
-   2.4.4
-   
-   $ python main.py --version
-   c-test-gen 2.4.4
-   
-   # バージョンを変更
-   $ echo "2.9.9" > VERSION
-   
-   $ python main.py --version
-   c-test-gen 2.9.9
-   ```
+    Main->>TestGen: generate(truth_table, parsed_data)
+    
+    TestGen->>MockGen: generate_mocks(parsed_data)
+    Note over MockGen: モック/スタブ生成
+    MockGen->>MockGen: 外部関数リスト作成
+    MockGen->>MockGen: グローバル変数生成
+    MockGen->>MockGen: モック関数実装
+    MockGen->>MockGen: カウンタ変数追加
+    MockGen-->>TestGen: mock_code
+    
+    loop 各テストケース
+        TestGen->>CommentGen: generate_comment(test_case)
+        CommentGen->>CommentGen: 対象分岐を記載
+        CommentGen->>CommentGen: 条件を記載
+        CommentGen->>CommentGen: 真偽パターンを記載
+        Note over CommentGen: v2.6.0: ネスト条件も詳細に
+        CommentGen->>CommentGen: 期待動作を記載
+        CommentGen-->>TestGen: comment_text
+        
+        TestGen->>TestFuncGen: generate_test_function(test_case)
+        TestFuncGen->>TestFuncGen: テスト名生成
+        TestFuncGen->>TestFuncGen: 変数初期化コード
+        Note over TestFuncGen: v2.6.0: ネスト条件対応
+        TestFuncGen->>TestFuncGen: モック設定コード
+        TestFuncGen->>TestFuncGen: 対象関数呼び出し
+        TestFuncGen->>TestFuncGen: TEST_ASSERT_EQUAL生成
+        TestFuncGen->>TestFuncGen: 呼び出し回数チェック
+        TestFuncGen-->>TestGen: test_function_code
+    end
+    
+    TestGen->>TestGen: プロトタイプ宣言生成
+    TestGen->>TestGen: setUp/tearDown生成
+    TestGen->>TestGen: 全コードを結合
+    TestGen-->>Main: TestCode
+```
 
 ---
 
-## 処理パス一覧
+## 6. IOTableGenerator詳細シーケンス
 
-### 正常パス（グリーンパス）
-1. **AST解析成功パス** → 図2の左側
-   - プリプロセス → AST構築 → 条件抽出 → テスト生成
+```mermaid
+sequenceDiagram
+    participant Main as メインプログラム
+    participant IOTable as IOTableGenerator
+    participant VarExtractor as VariableExtractor
 
-2. **スタンドアロンモード** → 図7
-   - ソースコピー → テストコード追加 → 1ファイル生成
-
-3. **標準型読み込み成功** → 図8（v2.4.4）
-   - standard_types.h読み込み → 34個の標準型ロード
-
-4. **バージョン取得成功** → 図9（v2.4.4）
-   - VERSIONファイル読み込み → バージョン設定
-
-### 警告パス（イエローパス）
-1. **フォールバックモード** → 図6
-   - AST失敗 → 正規表現抽出 → 空の真偽表
-
-2. **標準型フォールバック** → 図8（v2.4.4）
-   - ファイル未発見 → 最小セット使用
-
-3. **バージョンフォールバック** → 図9（v2.4.4）
-   - ファイル未発見 → "unknown" 設定
-
-### エラーパス（レッドパス）
-1. **ファイル読み込み失敗** → 処理中断
-2. **無効な引数** → エラーメッセージ表示
-3. **出力ディレクトリ作成失敗** → エラー終了
-
----
-
-## カラーコード
-
-- 🟢 緑: 成功パス
-- 🟡 黄: 警告・フォールバック
-- 🔴 赤: エラー・未実装
+    Main->>IOTable: generate(test_code, truth_table)
+    
+    IOTable->>VarExtractor: extract_input_variables(test_code)
+    Note over VarExtractor: テストコードから入力変数を抽出
+    VarExtractor->>VarExtractor: 代入文を解析
+    VarExtractor->>VarExtractor: モック設定を解析
+    VarExtractor-->>IOTable: input_variables_list
+    
+    IOTable->>VarExtractor: extract_output_variables(test_code)
+    Note over VarExtractor: 出力変数を抽出
+    VarExtractor->>VarExtractor: TEST_ASSERT文を解析
+    VarExtractor->>VarExtractor: 期待値を取得
+    VarExtractor-->>IOTable: output_variables_list
+    
+    loop 各テストケース
+        IOTable->>IOTable: テストケース番号を設定
+        IOTable->>IOTable: 入力値を設定
+        Note over IOTable: v2.6.0: ネスト条件の真偽値も反映
+        IOTable->>IOTable: 期待出力値を設定
+        IOTable->>IOTable: I/O表データに追加
+    end
+    
+    IOTable-->>Main: IOTableData
+```
 
 ---
 
-## バージョン別の主な変更点
+## 7. v2.6.0の主要な処理フロー（ネスト条件）
 
-### v2.4.3での変更点
+```mermaid
+sequenceDiagram
+    participant User
+    participant System as AutoUniTestGen
+    participant MCDC as MCDCパターン生成
 
-1. **フォールバックモード対応** (図2, 図6)
-   - AST解析失敗時の処理フロー追加
-   - 正規表現ベースの抽出ロジック
-
-2. **スタンドアロンモード対応** (図1, 図3, 図7)
-   - `generate_standalone()`の処理フロー追加
-   - 元のソースとテストコードの統合処理
-
-3. **処理の明確化**
-   - 各ステップの責務を明確に図示
-   - エラーハンドリングパスを明示
-
-### v2.4.3.1での変更点
-
-4. **標準型に対する警告抑制** (図8)
-   - `TypedefExtractor._extract_definition_from_source()`に標準型チェックを追加
-   - 標準型（int8_t, uint8_t等）については警告を出力しない
-
-### v2.4.4での変更点 🆕
-
-5. **標準型の外部ファイル化** (図8更新)
-   - `standard_types.h` からの動的読み込み
-   - `_load_standard_types()` メソッド追加
-   - ハードコードを排除してメンテナンス性向上
-
-6. **バージョン動的取得** (図9新規)
-   - `get_version()` 関数実装
-   - VERSIONファイルからの自動読み込み
-   - バージョン管理の一元化
+    User->>System: ネスト条件のCコード
+    Note over User: if ((A) && ((B||C||D||E||F||G)) && (H))
+    
+    System->>System: 条件抽出
+    Note over System: conditions = ["A", "((B||C||D||E||F||G))", "H"]
+    
+    System->>System: ネスト構造検出
+    Note over System: has_nested = True
+    
+    System->>MCDC: 複雑条件処理開始
+    
+    MCDC->>MCDC: 再帰的展開
+    Note over MCDC: Step 1: OR条件を展開
+    Note over MCDC: "((B||C||D||E||F||G))" → ["B","C","D","E","F","G"]
+    
+    MCDC->>MCDC: 構造情報構築
+    Note over MCDC: structure = [<br/>('simple', 1),  # A<br/>('or', 6),      # B-G<br/>('simple', 1)   # H<br/>]
+    
+    MCDC->>MCDC: MC/DCパターン生成
+    Note over MCDC: Step 2a: Aの独立性テスト<br/>TTFFFFFT vs FTFFFFFT
+    Note over MCDC: Step 2b: B-Gの各独立性テスト<br/>TFFFFFFT vs TFTFFFFT<br/>TFFFFFFT vs TFFTFFFT<br/>... (6パターン)
+    Note over MCDC: Step 2c: Hの独立性テスト<br/>TTFFFFFT vs TTFFFFFF
+    
+    MCDC->>MCDC: 重複削除
+    Note over MCDC: 9個のユニークパターン
+    
+    MCDC-->>System: MC/DCパターン（100%）
+    System-->>User: 真偽表Excel（9パターン）
+```
 
 ---
 
-**作成日**: 2025-11-13  
-**最終更新**: 2025-11-19 (v2.4.4対応)  
-**バージョン**: v2.4.4  
-**次回更新**: v2.5.0（pcpp対応）後
+## 8. データ構造
+
+### ParsedData（拡張版）
+```python
+{
+    'file_name': 'sample.c',
+    'function_name': 'process',
+    'conditions': [
+        {
+            'line': 10,
+            'type': 'and_condition',
+            'expression': '((A) && ((B||C||D||E||F||G)) && (H))',
+            'operator': 'and',
+            'conditions': [  # v2.6.0: 展開された条件リスト
+                '(A)',
+                '((B||C||D||E||F||G))',
+                '(H)'
+            ],
+            'has_nested': True,  # v2.6.0: ネスト構造フラグ
+            'ast_node': <AST Node>
+        }
+    ],
+    'external_functions': ['f4', 'mx27'],
+    'global_variables': ['sensor', 'mode', 'status']
+}
+```
+
+### TruthTableData（拡張版）
+```python
+{
+    'test_cases': [
+        {
+            'no': 1,
+            'truth': 'TTFFFFFT',  # v2.6.0: 8桁（展開後の条件数）
+            'condition': 'if ((A) && ((B||C||D||E||F||G)) && (H))',
+            'expected': '条件を満たす',
+            'pattern_explanation': 'A=T, B=T(他F), H=T'  # v2.6.0: 詳細説明
+        },
+        {
+            'no': 2,
+            'truth': 'FTFFFFFT',
+            'condition': 'if ((A) && ((B||C||D||E||F||G)) && (H))',
+            'expected': '条件を満たさない',
+            'pattern_explanation': 'A=F(独立性), B=T, H=T'
+        },
+        # ... 9パターン
+    ]
+}
+```
+
+---
+
+## 変更履歴
+
+### v2.6.0 (2025-11-19)
+- ✅ ネストしたAND/OR条件の処理フロー追加
+- ✅ MCDCPatternGeneratorの詳細シーケンス追加
+- ✅ 再帰的展開のフロー図追加
+- ✅ MC/DC 100%カバレッジの処理プロセス明確化
+
+### v2.5.0以前
+- 基本的な処理フロー
+- 単純なOR/AND条件のみ対応
+
+---
+
+**注**: このシーケンス図は、v2.6.0で実装されたネストしたAND/OR条件のMC/DC処理を正確に反映しています。

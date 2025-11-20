@@ -518,7 +518,6 @@ class TestFunctionGenerator:
                 func_name, test_case, parsed_data
             )
             lines.append(f"    mock_{func_name}_return_value = {return_value};")
-            lines.append(f"    mock_{func_name}_call_count = 0;")
         
         lines.append("")
         return '\n'.join(lines)
