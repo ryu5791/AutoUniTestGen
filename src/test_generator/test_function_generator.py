@@ -224,14 +224,22 @@ class TestFunctionGenerator:
                 if hasattr(test_case, 'input_values') and test_case.input_values:
                     if param_name in test_case.input_values:
                         value = test_case.input_values[param_name]
-                        lines.append(f"    {param_name} = {value};")
+                        # 型定義を追加
+                        if '_t' in param_type or (param_type and param_type[0].isupper()):
+                            lines.append(f"    {param_type} {param_name} = {{{value}}};")
+                        else:
+                            lines.append(f"    {param_type} {param_name} = {value};")
                         continue
                 
                 # デフォルト値を設定
                 if '*' in param_type:
-                    lines.append(f"    {param_name} = NULL;")
+                    lines.append(f"    {param_type} {param_name} = NULL;")
                 else:
-                    lines.append(f"    {param_name} = 0;")
+                    # 構造体や配列の場合は {0}、それ以外は 0
+                    if '_t' in param_type or (param_type and param_type[0].isupper()):
+                        lines.append(f"    {param_type} {param_name} = {{0}};")
+                    else:
+                        lines.append(f"    {param_type} {param_name} = 0;")
         
         # 対応する条件を検索
         matching_condition = None
