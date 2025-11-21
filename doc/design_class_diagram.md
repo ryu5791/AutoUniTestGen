@@ -1,7 +1,7 @@
-# AutoUniTestGen クラス図 (v2.6.5)
+# AutoUniTestGen クラス図 (v2.7)
 
 **最終更新**: 2025-11-20  
-**バージョン**: 2.6.5
+**バージョン**: 2.7.0
 
 ---
 
@@ -9,11 +9,38 @@
 
 このドキュメントでは、AutoUniTestGenの主要なクラスとその関係を説明します。
 
-v2.6.5では、以下の改善を実施しました：
-- v2.6.2: グローバル変数初期化の削除（MockGenerator）
-- v2.6.3: コメント形式修正（UnityTestGenerator）、result変数型定義追加（TestFunctionGenerator）
-- v2.6.4: デフォルト値モック設定の削除（TestFunctionGenerator）
-- v2.6.5: パラメータ変数型定義追加（TestFunctionGenerator）
+v2.7では、以下の改善を予定しています：
+- 構造体型戻り値のアサーション対応（構造体判定機能の追加）
+- 構造体メンバー情報の抽出機能（将来の拡張用）
+
+過去のバージョン履歴：
+- v2.6.6: 構造体アサーション問題の識別
+- v2.6.5: パラメータ変数型定義追加
+- v2.6.4: デフォルト値モック設定の削除
+- v2.6.3: コメント形式修正、result変数型定義追加
+- v2.6.2: グローバル変数初期化の削除
+
+---
+
+## アーキテクチャ概要
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    CLI Layer                             │
+│  (cli.py, main.py, batch_processor.py)                  │
+└───────────────┬─────────────────────────────────────────┘
+                │
+┌───────────────▼─────────────────────────────────────────┐
+│            Core Generator Layer                          │
+│  (c_test_auto_generator.py, config.py)                  │
+└─┬─────────┬──────────┬──────────┬───────────┬──────────┘
+  │         │          │          │           │
+  │         │          │          │           │
+┌─▼─────┐ ┌▼────────┐ ┌▼────────┐ ┌▼─────────┐ ┌▼────────┐
+│Parser │ │Truth    │ │Test     │ │IO Table  │ │Output   │
+│Layer  │ │Table    │ │Generator│ │Generator │ │Layer    │
+└───────┘ └─────────┘ └─────────┘ └──────────┘ └─────────┘
+```
 
 ---
 
@@ -21,572 +48,702 @@ v2.6.5では、以下の改善を実施しました：
 
 ```mermaid
 classDiagram
-    %% メインクラス
+    %% ===== エントリーポイント =====
     class Main {
         +main()
         -parse_arguments()
         -run_generation()
     }
     
-    %% ファイル処理
-    class FileManager {
-        -input_file: str
-        -output_dir: str
-        +read_file() str
-        +write_file(content: str)
-        +create_output_dir()
+    %% ===== CLIレイヤー =====
+    class CLI {
+        +create_parser() ArgumentParser
+        +main()
+        -run_single_mode()
+        -run_batch_mode()
+        -run_batch_dir_mode()
+        -get_version() str
+    }
+    
+    class BatchProcessor {
+        -config: Dict
+        -parallel: bool
+        -workers: int
+        +process_batch(config_path: str) List~GenerationResult~
+        -process_single(task: Dict) GenerationResult
+        -process_parallel(tasks: List) List~GenerationResult~
+    }
+    
+    class ConfigManager {
+        -config_file: str
+        -config: Dict
+        +load_config(path: str)
+        +get(key: str) Any
+        +set(key: str, value: Any)
+        +save()
+    }
+    
+    %% ===== コアジェネレータ =====
+    class CTestAutoGenerator {
+        -parser: CCodeParser
+        -truth_table_generator: TruthTableGenerator
+        -test_generator: UnityTestGenerator
+        -io_table_generator: IOTableGenerator
+        -excel_writer: ExcelWriter
+        -config: Dict
+        -no_overwrite: bool
+        -standalone_mode: bool
+        +generate_all(c_file, function, output_dir) GenerationResult
+        +generate_truth_table_only() GenerationResult
+        +generate_test_code_only() GenerationResult
+        +generate_io_table_only() GenerationResult
+        -_init_components()
+    }
+    
+    class GenerationResult {
+        +truth_table_path: Path
+        +test_code_path: Path
+        +io_table_path: Path
+        +success: bool
+        +error_message: str
+        +__str__() str
+    }
+    
+    %% ===== パーサーレイヤー =====
+    class CCodeParser {
+        -preprocessor: Preprocessor
+        -ast_builder: ASTBuilder
+        -condition_extractor: ConditionExtractor
+        -function_extractor: FunctionExtractor
+        -typedef_extractor: TypedefExtractor
+        -defines: Dict
+        -include_paths: List
+        +parse(source_file, target_function) ParsedData
+        -_preprocess(source: str) str
+        -_build_ast(preprocessed: str) AST
+        -_extract_function_info(ast) FunctionInfo
+        -_extract_conditions(ast) List~Condition~
+        -_extract_typedefs(ast) List~TypeDef~
+        -_extract_struct_definitions(ast) List~StructDefinition~ 🆕v2.7
     }
     
     class Preprocessor {
+        -defines: Dict
+        -include_paths: List
         +preprocess(source: str) str
         -remove_comments(source: str) str
         -expand_macros(source: str) str
         -handle_directives(source: str) str
+        -resolve_includes(source: str) str
     }
     
-    %% パーサー
-    class CParser {
-        +parse(source: str) ParsedData
-        -build_ast(source: str) AST
-        -extract_functions(ast: AST) List~Function~
-        -extract_types(ast: AST) List~TypeDef~
+    class ASTBuilder {
+        +build(preprocessed_code: str) AST
+        -parse_with_pycparser(code: str) AST
+        -handle_parse_error(error: Exception)
+    }
+    
+    class ConditionExtractor {
+        +extract(ast: AST, function_name: str) List~Condition~
+        -visit_if_stmt(node)
+        -visit_switch_stmt(node)
+        -classify_condition_type(expr) ConditionType
+        -extract_simple_condition(node) Condition
+        -extract_compound_condition(node) Condition
     }
     
     class FunctionExtractor {
-        +extract_function(source: str, name: str) FunctionInfo
-        +extract_external_functions(source: str) List~str~
+        +extract_function_info(ast, name) FunctionInfo
+        +extract_parameters(func_node) List~Parameter~
+        +extract_local_variables(func_body) List~Variable~
+        +extract_external_functions(ast) List~str~
     }
     
-    %% 分析
-    class BranchAnalyzer {
-        +analyze_branches(func: FunctionInfo) List~Condition~
-        -extract_conditions(ast: AST) List~Condition~
-        -classify_condition_type(cond: str) ConditionType
-    }
-    
-    %% テスト生成（コアクラス）
-    class UnityTestGenerator {
-        -mock_gen: MockGenerator
-        -test_func_gen: TestFunctionGenerator
-        -proto_gen: PrototypeGenerator
-        -comment_gen: CommentGenerator
-        -code_extractor: CodeExtractor
-        +generate(truth_table, parsed_data, source) TestCode
-        -_generate_includes() str
-        -_generate_setup_teardown() str
-        -_generate_main_function() str
-        -_generate_standalone_test(source, truth_table, parsed_data) str
-    }
-    
-    %% モック生成（v2.6.2で更新）
-    class MockGenerator {
-        -mock_functions: List~MockFunction~
-        +generate_mocks(parsed_data) str
-        +generate_mock_variables() str ⚡v2.6.2: 初期化削除
-        +generate_mock_functions() str
-        +generate_reset_function() str
-    }
-    
-    %% テスト関数生成（v2.6.3, v2.6.4, v2.6.5で更新）
-    class TestFunctionGenerator {
-        -boundary_calc: BoundaryValueCalculator
-        +generate_test_functions(truth_table, parsed_data) List~str~
-        -_generate_test_function(test_case, parsed_data) str
-        -_generate_function_name(condition, truth) str
-        -_generate_variable_init(test_case, parsed_data) str ⚡v2.6.3,v2.6.5: 型定義追加
-        -_generate_mock_setup(test_case, parsed_data) str ⚡v2.6.4: デフォルト値削除
-        -_generate_function_call(parsed_data) str
-        -_generate_assertions(test_case, parsed_data) str
-        -_determine_mock_return_value(func, test_case, parsed_data) str
-    }
-    
-    class BoundaryValueCalculator {
-        +generate_test_value(expression: str, truth: str) str
-        +extract_variables(expression: str) List~str~
-        -_calculate_boundary_value(expr: str, truth: str) int
-    }
-    
-    %% その他の生成クラス
-    class MCDCTruthTableGenerator {
-        +generate(parsed_data: ParsedData) TruthTableData
-        -_generate_combinations(conditions) List~TestCase~
-        -_check_mcdc_coverage(combinations) bool
-    }
-    
-    class IOTableGenerator {
-        +generate(truth_table, parsed_data) ExcelFile
-        -_create_worksheet(truth_table) Worksheet
-        -_format_cells(ws: Worksheet)
-    }
-    
-    class PrototypeGenerator {
-        +generate_prototypes(truth_table) List~str~
-    }
-    
-    class CommentGenerator {
-        +generate_test_comment(test_case) str
-        +generate_section_comment(section: str) str
+    class TypedefExtractor {
+        +extract_typedefs(ast) List~TypeDef~
+        +extract_struct_definitions(ast) List~StructDefinition~ 🆕v2.7
+        -parse_typedef_node(node) TypeDef
+        -parse_struct_node(node) StructDefinition 🆕v2.7
     }
     
     class CodeExtractor {
-        +extract_function_body(source: str, func_name: str) str
-        +extract_type_definitions(source: str) str
+        +extract_function_body(source, func_name) str
+        +extract_macros(source) List~Macro~
+        +extract_variables(source) List~Variable~
+        +extract_typedefs(source) List~TypeDef~
     }
     
-    %% データ構造
+    %% ===== データ構造 =====
     class ParsedData {
         +function_info: FunctionInfo
         +conditions: List~Condition~
         +external_functions: List~str~
-        +type_definitions: List~TypeDef~
-        +bitfields: Dict
+        +typedefs: List~TypeDef~
+        +macros: List~Macro~
+        +variables: List~Variable~
+        +struct_definitions: List~StructDefinition~ 🆕v2.7
+        +to_dict() Dict
     }
     
     class FunctionInfo {
         +name: str
         +return_type: str
         +parameters: List~Parameter~
-        +body: str
+        +local_variables: List~Variable~
+        +to_dict() Dict
     }
     
     class Condition {
-        +expression: str
+        +line: int
         +type: ConditionType
-        +variables: List~str~
+        +expression: str
+        +operator: str
+        +left: str
+        +right: str
+        +conditions: List~str~
+        +cases: List
+        +ast_node: Any
+        +parent_context: str
+        +to_dict() Dict
     }
     
-    class TestCase {
-        +id: int
-        +condition: str
-        +truth: str
-        +input_values: Dict
-        +expected_output: str
+    class StructDefinition {
+        <<dataclass>> 🆕v2.7
+        +name: str
+        +members: List~StructMember~
+        +is_typedef: bool
+        +to_dict() Dict
+    }
+    
+    class StructMember {
+        <<dataclass>> 🆕v2.7
+        +name: str
+        +type: str
+        +bit_width: int
+        +is_pointer: bool
+        +is_array: bool
+        +array_size: int
+    }
+    
+    %% ===== 真偽表生成 =====
+    class TruthTableGenerator {
+        -condition_analyzer: ConditionAnalyzerV26
+        -mcdc_pattern_gen: MCDCPatternGeneratorV261
+        +generate(parsed_data) TruthTableData
+        -_analyze_conditions(conditions) AnalyzedConditions
+        -_generate_mcdc_patterns(analyzed) List~TestCase~
+    }
+    
+    class ConditionAnalyzerV26 {
+        +analyze(conditions: List~Condition~) AnalyzedConditions
+        -analyze_simple_condition(cond) AnalyzedCondition
+        -analyze_compound_condition(cond) AnalyzedCondition
+        -detect_dependencies(conds) DependencyGraph
+    }
+    
+    class MCDCPatternGeneratorV261 {
+        +generate(analyzed_conditions) List~TestCase~
+        -generate_for_simple_if(cond) List~TestCase~
+        -generate_for_or_condition(cond) List~TestCase~
+        -generate_for_and_condition(cond) List~TestCase~
+        -generate_for_switch(cond) List~TestCase~
+        -calculate_mcdc_pairs(cond) List~Pair~
     }
     
     class TruthTableData {
+        +function_name: str
         +test_cases: List~TestCase~
-        +coverage_rate: float
+        +total_tests: int
+        +to_dict() Dict
     }
     
-    class MockFunction {
-        +name: str
-        +return_type: str
-        +return_variable: str
-        +call_count_variable: str
+    class TestCase {
+        +no: int
+        +truth: str
+        +condition: str
+        +expected: str
+        +test_name: str
+        +comment: str
+        +input_values: Dict
+        +output_values: Dict
+        +to_dict() Dict
     }
     
-    %% 関係性
-    Main --> FileManager
-    Main --> CParser
-    Main --> BranchAnalyzer
-    Main --> MCDCTruthTableGenerator
-    Main --> UnityTestGenerator
-    Main --> IOTableGenerator
+    %% ===== テスト生成 =====
+    class UnityTestGenerator {
+        -mock_gen: MockGenerator
+        -test_func_gen: TestFunctionGenerator
+        -proto_gen: PrototypeGenerator
+        -comment_gen: CommentGenerator
+        -code_extractor: CodeExtractor
+        -include_target_function: bool
+        +generate(truth_table, parsed_data, source) TestCode
+        -_generate_includes() str
+        -_generate_type_definitions(parsed_data) str
+        -_generate_prototypes(parsed_data) str
+        -_generate_mocks(parsed_data) str
+        -_generate_test_functions(truth_table, parsed_data) str
+        -_generate_setup_teardown() str
+        -_generate_target_function_code(source) str
+        -_generate_main_function(truth_table) str
+        -_generate_standalone_test(source, truth_table, parsed_data) str
+    }
     
-    FileManager --> Preprocessor
+    class MockGenerator {
+        -mock_functions: List~MockFunction~
+        +generate_mocks(parsed_data) str
+        +generate_mock_variables() str
+        +generate_mock_functions() str
+        +generate_reset_function() str
+        -_create_mock_function(func_name, parsed_data) MockFunction
+    }
     
-    CParser --> FunctionExtractor
-    CParser --> ParsedData
+    class TestFunctionGenerator {
+        -boundary_calc: BoundaryValueCalculator
+        -return_analyzer: ReturnPatternAnalyzer
+        -expectation_engine: ExpectationInferenceEngine
+        +generate_test_functions(truth_table, parsed_data) List~str~
+        -_generate_test_function(test_case, parsed_data) str
+        -_generate_function_name(condition, truth) str
+        -_generate_variable_init(test_case, parsed_data) str
+        -_generate_mock_setup(test_case, parsed_data) str
+        -_generate_function_call(parsed_data) str
+        -_generate_assertions(test_case, parsed_data) str ⚡v2.7: 構造体対応
+        -_determine_mock_return_value(func, test_case, parsed_data) str
+        -_is_struct_type(type_name: str) bool 🆕v2.7
+        -_get_struct_members(type_name, parsed_data) List~StructMember~ 🆕v2.7
+    }
     
-    BranchAnalyzer --> Condition
+    class BoundaryValueCalculator {
+        +calculate(condition: Condition) BoundaryValues
+        -calculate_for_comparison(operator, value) List~Value~
+        -detect_type_range(var_type) Range
+    }
     
-    UnityTestGenerator --> MockGenerator
-    UnityTestGenerator --> TestFunctionGenerator
-    UnityTestGenerator --> PrototypeGenerator
-    UnityTestGenerator --> CommentGenerator
-    UnityTestGenerator --> CodeExtractor
+    class ReturnPatternAnalyzer {
+        +analyze(function_info, conditions) ReturnPatterns
+        -analyze_return_statements(func_body) List~Return~
+        -infer_return_conditions(returns, conditions) Dict
+    }
     
-    MockGenerator --> MockFunction
-    MockGenerator --> ParsedData
+    class ExpectationInferenceEngine {
+        +infer_expectations(test_case, parsed_data) Expectations
+        -infer_return_value(test_case) Value
+        -infer_mock_behaviors(test_case) Dict
+        -infer_variable_states(test_case) Dict
+    }
     
-    TestFunctionGenerator --> BoundaryValueCalculator
-    TestFunctionGenerator --> TestCase
-    TestFunctionGenerator --> ParsedData
+    class PrototypeGenerator {
+        +generate_prototypes(parsed_data) str
+        -generate_function_prototype(func_info) str
+        -generate_typedef_declarations(typedefs) str
+    }
     
-    MCDCTruthTableGenerator --> TruthTableData
-    MCDCTruthTableGenerator --> TestCase
+    class CommentGenerator {
+        +generate_test_comment(test_case) str
+        +generate_section_comment(section_name) str
+        -format_condition_comment(condition) str
+    }
     
-    IOTableGenerator --> TruthTableData
+    %% ===== I/O表生成 =====
+    class IOTableGenerator {
+        -variable_extractor: VariableExtractor
+        +generate(truth_table, parsed_data) IOTableData
+        -_extract_io_variables(parsed_data) IOVariables
+        -_map_test_cases_to_io(truth_table, io_vars) List~IOEntry~
+    }
+    
+    class IOTableData {
+        +function_name: str
+        +input_variables: List~Variable~
+        +output_variables: List~Variable~
+        +test_entries: List~IOEntry~
+        +to_dict() Dict
+    }
+    
+    class IOEntry {
+        +test_no: int
+        +inputs: Dict
+        +outputs: Dict
+        +condition: str
+    }
+    
+    %% ===== 出力レイヤー =====
+    class ExcelWriter {
+        +write_truth_table(data, path)
+        +write_io_table(data, path)
+        -create_workbook() Workbook
+        -format_header_row(sheet)
+        -format_data_rows(sheet, data)
+    }
+    
+    class TestCode {
+        +header: str
+        +includes: str
+        +type_definitions: str
+        +prototypes: str
+        +mock_variables: str
+        +mock_functions: str
+        +test_functions: str
+        +setup_teardown: str
+        +target_function_code: str
+        +main_function: str
+        +to_string() str
+        +save(filepath)
+    }
+    
+    %% ===== ユーティリティ =====
+    class ErrorHandler {
+        -log_file: str
+        -log_level: LogLevel
+        +handle_error(error, level)
+        +log(message, level)
+        +format_error_message(error) str
+    }
+    
+    class PerformanceMonitor {
+        -start_time: float
+        -metrics: Dict
+        +start_timer(name)
+        +stop_timer(name)
+        +get_metrics() Dict
+        +report()
+    }
+    
+    class MemoryMonitor {
+        +get_memory_usage() int
+        +log_memory_snapshot(label)
+        +get_peak_memory() int
+    }
+    
+    class ResultCache {
+        -cache: Dict
+        +get(key) Any
+        +set(key, value)
+        +clear()
+        +is_cached(key) bool
+    }
+    
+    class TemplateEngine {
+        -templates: Dict
+        +load_template(name) str
+        +render(template, context) str
+        +create_custom_template(name, content)
+    }
+    
+    %% ===== 関係性 =====
+    Main --> CLI : uses
+    CLI --> CTestAutoGenerator : creates
+    CLI --> BatchProcessor : uses
+    CLI --> ConfigManager : uses
+    CLI --> ErrorHandler : uses
+    CLI --> PerformanceMonitor : uses
+    
+    BatchProcessor --> CTestAutoGenerator : creates
+    
+    CTestAutoGenerator --> CCodeParser : uses
+    CTestAutoGenerator --> TruthTableGenerator : uses
+    CTestAutoGenerator --> UnityTestGenerator : uses
+    CTestAutoGenerator --> IOTableGenerator : uses
+    CTestAutoGenerator --> ExcelWriter : uses
+    CTestAutoGenerator --> GenerationResult : creates
+    
+    CCodeParser --> Preprocessor : uses
+    CCodeParser --> ASTBuilder : uses
+    CCodeParser --> ConditionExtractor : uses
+    CCodeParser --> FunctionExtractor : uses
+    CCodeParser --> TypedefExtractor : uses
+    CCodeParser --> CodeExtractor : uses
+    CCodeParser --> ParsedData : creates
+    
+    TypedefExtractor --> StructDefinition : creates
+    StructDefinition --> StructMember : contains
+    
+    ParsedData --> FunctionInfo : contains
+    ParsedData --> Condition : contains
+    ParsedData --> StructDefinition : contains
+    
+    TruthTableGenerator --> ConditionAnalyzerV26 : uses
+    TruthTableGenerator --> MCDCPatternGeneratorV261 : uses
+    TruthTableGenerator --> TruthTableData : creates
+    TruthTableData --> TestCase : contains
+    
+    UnityTestGenerator --> MockGenerator : uses
+    UnityTestGenerator --> TestFunctionGenerator : uses
+    UnityTestGenerator --> PrototypeGenerator : uses
+    UnityTestGenerator --> CommentGenerator : uses
+    UnityTestGenerator --> CodeExtractor : uses
+    UnityTestGenerator --> TestCode : creates
+    
+    TestFunctionGenerator --> BoundaryValueCalculator : uses
+    TestFunctionGenerator --> ReturnPatternAnalyzer : uses
+    TestFunctionGenerator --> ExpectationInferenceEngine : uses
+    TestFunctionGenerator ..> StructDefinition : queries 🆕v2.7
+    
+    IOTableGenerator --> IOTableData : creates
+    IOTableData --> IOEntry : contains
+    
+    ExcelWriter --> TruthTableData : writes
+    ExcelWriter --> IOTableData : writes
+    
+    PerformanceMonitor --> MemoryMonitor : uses
+    TemplateEngine --> TestCode : generates from
 ```
 
 ---
 
-## 主要クラスの詳細
+## 主要クラスの責務
 
-### 1. UnityTestGenerator（テスト生成の中核）
+### エントリーポイントレイヤー
 
-**責任**:
-- Unityテストコード全体の生成を統括
-- 各コンポーネントを調整してテストコードを構築
+#### Main
+- アプリケーションのエントリーポイント
+- コマンドライン引数の解析
+- 実行モードの振り分け
 
-**主要メソッド**:
-- `generate()`: テストコード生成のエントリポイント
-- `_generate_standalone_test()`: スタンドアロン版テストコード生成（v2.4.3）
-- `_generate_setup_teardown()`: setUp/tearDown関数の生成
+#### CLI
+- コマンドライン引数パーサーの作成
+- シングルモード、バッチモード、ディレクトリモードの実行
+- バージョン情報の提供
 
-**v2.6.3での変更**:
-```python
-# コメント形式の修正（120-122行目）
-# Before
-parts.append("=" * 80)
-parts.append("/* 以下、自動生成されたテストコード */")
-parts.append("=" * 80 + "\n")
+### コアジェネレータレイヤー
 
-# After
-parts.append("//" + "=" * 78)
-parts.append("// 以下、自動生成されたテストコード")
-parts.append("//" + "=" * 78 + "\n")
-```
+#### CTestAutoGenerator
+- 全体の生成プロセスを統合
+- 各コンポーネントの初期化と調整
+- 生成結果の管理
 
----
+### パーサーレイヤー
 
-### 2. MockGenerator（モック生成）⚡v2.6.2で更新
+#### CCodeParser
+- C言語ソースファイルの解析の統括
+- AST構築と情報抽出の調整
+- ParsedDataの生成
 
-**責任**:
+#### Preprocessor
+- コメント除去
+- マクロ展開
+- プリプロセッサディレクティブ処理
+- インクルードファイル解決
+
+#### TypedefExtractor ⚡v2.7強化
+- typedef定義の抽出
+- **構造体定義の抽出（新機能）**
+- **構造体メンバー情報の解析（新機能）**
+
+### 真偽表生成レイヤー
+
+#### TruthTableGenerator
+- MC/DC真偽表の生成を統括
+- 条件分析とパターン生成の調整
+
+#### ConditionAnalyzerV26
+- 条件分岐の詳細分析
+- 複合条件の分解
+- 依存関係の検出
+
+#### MCDCPatternGeneratorV261
+- MC/DCテストパターンの生成
+- 各条件タイプに応じたパターン生成
+- MC/DCペアの計算
+
+### テスト生成レイヤー
+
+#### UnityTestGenerator
+- Unityテストコードの生成を統括
+- 各セクションの組み立て
+- スタンドアロンモード対応
+
+#### TestFunctionGenerator ⚡v2.7強化
+- 個別テスト関数の生成
+- 変数初期化コードの生成
+- **構造体型のアサーション生成（新機能）**
+- **構造体判定機能（新機能）**
+
+#### MockGenerator
 - モック関数の生成
 - モック変数の生成
-- reset_all_mocks()関数の生成
+- リセット関数の生成
 
-**主要メソッド**:
-- `generate_mock_variables()`: モック変数の宣言を生成
-- `generate_mock_functions()`: モック関数の実装を生成
-- `generate_reset_function()`: reset_all_mocks()を生成
+### I/O表生成レイヤー
 
-**v2.6.2での変更**:
+#### IOTableGenerator
+- I/O一覧表の生成
+- 入出力変数の抽出
+- テストケースとのマッピング
+
+### 出力レイヤー
+
+#### ExcelWriter
+- Excelファイルの書き込み
+- フォーマッティング
+- 複数シートの管理
+
+---
+
+## v2.7での主要な変更点
+
+### 1. 構造体型判定機能の追加
+
+**TestFunctionGenerator**に以下のメソッドを追加：
+
 ```python
-# グローバル変数の初期化を削除（110, 113行目）
-# Before
-lines.append(f"static {return_type} {return_variable} = 0;")
-lines.append(f"static int {call_count_variable} = 0;")
-
-# After
-lines.append(f"static {return_type} {return_variable};")
-lines.append(f"static int {call_count_variable};")
+def _is_struct_type(self, type_name: str) -> bool:
+    """
+    型が構造体かどうかを判定
+    
+    判定基準:
+    1. _t で終わる（typedef struct の命名規則）
+    2. 大文字で始まる（カスタム型の命名規則）
+    3. 'struct' キーワードが含まれる
+    
+    Args:
+        type_name: 型名
+    
+    Returns:
+        構造体の場合True
+    """
 ```
 
-**生成コード例**:
-```c
-// v2.6.2以降
-static uint16_t mock_f4_return_value;     // 初期化なし
-static int mock_f4_call_count;            // 初期化なし
+### 2. 構造体メンバー情報の取得機能（将来の拡張用）
 
-static void reset_all_mocks(void) {
-    mock_f4_return_value = 0;             // setUp()から呼ばれて初期化
-    mock_f4_call_count = 0;
-}
-```
+**TestFunctionGenerator**に以下のメソッドを追加：
 
----
-
-### 3. TestFunctionGenerator（テスト関数生成）⚡v2.6.3, v2.6.4, v2.6.5で更新
-
-**責任**:
-- 個々のテスト関数の生成
-- 変数初期化コードの生成
-- モック設定コードの生成
-- アサーションコードの生成
-
-**主要メソッド**:
-- `generate_test_functions()`: 全テスト関数を生成
-- `_generate_variable_init()`: 変数初期化コードを生成 ⚡v2.6.3, v2.6.5
-- `_generate_mock_setup()`: モック設定コードを生成 ⚡v2.6.4
-- `_generate_assertions()`: アサーションコードを生成
-
-**v2.6.3での変更（result変数の型定義追加）**:
 ```python
-# result変数に型定義を追加（203-215行目）
-# Before
-if '*' in return_type:
-    lines.append("    result = NULL;")
-else:
-    lines.append("    result = 0;")
-
-# After
-if '*' in return_type:
-    lines.append(f"    {return_type} result = NULL;")
-else:
-    if '_t' in return_type or (return_type and return_type[0].isupper()):
-        lines.append(f"    {return_type} result = {{0}};")
-    else:
-        lines.append(f"    {return_type} result = 0;")
+def _get_struct_members(
+    self, 
+    type_name: str, 
+    parsed_data: ParsedData
+) -> List[StructMember]:
+    """
+    構造体のメンバー情報を取得
+    
+    Args:
+        type_name: 構造体の型名
+        parsed_data: 解析済みデータ
+    
+    Returns:
+        構造体メンバーのリスト
+    """
 ```
 
-**v2.6.4での変更（デフォルト値モック設定の削除）**:
+### 3. アサーション生成ロジックの改善
+
+**TestFunctionGenerator._generate_assertions()**を修正：
+
 ```python
-# デフォルト値（0）の場合は設定コードを生成しない（505-537行目）
-# Before
-def _generate_mock_setup(self, test_case, parsed_data):
-    lines = []
-    lines.append("    // モックを設定")
+def _generate_assertions(
+    self, 
+    test_case: TestCase, 
+    parsed_data: ParsedData
+) -> str:
+    """
+    アサーション生成（構造体対応）
     
-    for func_name in parsed_data.external_functions:
-        return_value = self._determine_mock_return_value(func_name, test_case, parsed_data)
-        lines.append(f"    mock_{func_name}_return_value = {return_value};")  # 常に生成
+    戻り値が構造体の場合：
+    - 構造体判定を実施
+    - TODOコメントで案内
+    - 将来的にはメンバーごとのアサーションを自動生成
     
-    return '\n'.join(lines)
-
-# After
-def _generate_mock_setup(self, test_case, parsed_data):
-    lines = []
-    mock_settings = []
-    
-    for func_name in parsed_data.external_functions:
-        return_value = self._determine_mock_return_value(func_name, test_case, parsed_data)
-        if return_value != "0":  # デフォルト値以外のみ
-            mock_settings.append(f"    mock_{func_name}_return_value = {return_value};")
-    
-    if mock_settings:  # 設定が必要な場合のみ
-        lines.append("    // モックを設定")
-        lines.extend(mock_settings)
-    
-    return '\n'.join(lines)
+    戻り値が基本型の場合：
+    - 従来通りのアサーション生成
+    """
 ```
 
-**v2.6.5での変更（パラメータ変数の型定義追加）**:
+### 4. データ構造の拡張
+
+**ParsedData**に以下のフィールドを追加：
+
 ```python
-# パラメータに型定義を追加（217-241行目）
-# Before
-for param in parsed_data.function_info.parameters:
-    param_name = param.get('name', '')
-    param_type = param.get('type', 'int')
+@dataclass
+class ParsedData:
+    # 既存フィールド
+    function_info: FunctionInfo
+    conditions: List[Condition]
+    external_functions: List[str]
+    typedefs: List[TypeDef]
     
-    if param_name in test_case.input_values:
-        value = test_case.input_values[param_name]
-        lines.append(f"    {param_name} = {value};")  # 型定義なし
-        continue
-    
-    if '*' in param_type:
-        lines.append(f"    {param_name} = NULL;")
-    else:
-        lines.append(f"    {param_name} = 0;")
-
-# After
-for param in parsed_data.function_info.parameters:
-    param_name = param.get('name', '')
-    param_type = param.get('type', 'int')
-    
-    if param_name in test_case.input_values:
-        value = test_case.input_values[param_name]
-        if '_t' in param_type or (param_type and param_type[0].isupper()):
-            lines.append(f"    {param_type} {param_name} = {{{value}}};")  # 構造体
-        else:
-            lines.append(f"    {param_type} {param_name} = {value};")  # 基本型
-        continue
-    
-    if '*' in param_type:
-        lines.append(f"    {param_type} {param_name} = NULL;")  # ポインタ
-    else:
-        if '_t' in param_type or (param_type and param_type[0].isupper()):
-            lines.append(f"    {param_type} {param_name} = {{0}};")  # 構造体
-        else:
-            lines.append(f"    {param_type} {param_name} = 0;")  # 基本型
+    # v2.7で追加
+    struct_definitions: List[StructDefinition] = field(default_factory=list)
 ```
 
-**生成コード例**:
-```c
-// v2.6.5
-void test_01_inState_status_eq_1_T(void) {
-    // 変数を初期化
-    state_def_t result = {0};     // v2.6.3: result変数に型定義
-    state_def_t inState = {0};    // v2.6.5: パラメータにも型定義
-    int count = 0;                // v2.6.5: パラメータにも型定義
-    inState.status = 1;
-    
-    // モックを設定
-    // （デフォルト値の場合はこのセクション自体が削除）v2.6.4
-    
-    // mock_func_return_value = 1;  // v2.6.4: 0以外の場合のみ生成
-    
-    // 対象関数を実行
-    test_func_with_params();
-}
-```
+**新規データクラス**：
 
----
-
-### 4. BoundaryValueCalculator（境界値計算）
-
-**責任**:
-- 条件式から境界値を計算
-- テストに使用する値を決定
-
-**主要メソッド**:
-- `generate_test_value()`: 条件式と真偽から適切なテスト値を生成
-- `extract_variables()`: 条件式から変数を抽出
-
-**生成例**:
 ```python
-# 条件式: value > 10
-# 真の場合: 11
-# 偽の場合: 10
-
-# 条件式: count >= 5
-# 真の場合: 5
-# 偽の場合: 4
+@dataclass
+class StructDefinition:
+    """構造体定義"""
+    name: str
+    members: List[StructMember]
+    is_typedef: bool
+    
+@dataclass
+class StructMember:
+    """構造体メンバー"""
+    name: str
+    type: str
+    bit_width: Optional[int] = None
+    is_pointer: bool = False
+    is_array: bool = False
+    array_size: Optional[int] = None
 ```
 
 ---
 
-### 5. MCDCTruthTableGenerator（真偽表生成）
+## クラス間のデータフロー
 
-**責任**:
-- MC/DC（Modified Condition/Decision Coverage）基準の真偽表を生成
-- 100%カバレッジを達成する最小限のテストケースを生成
-
-**主要メソッド**:
-- `generate()`: 真偽表データを生成
-- `_generate_combinations()`: 条件の組み合わせを生成
-- `_check_mcdc_coverage()`: MC/DCカバレッジを検証
-
----
-
-### 6. IOTableGenerator（I/O表生成）
-
-**責任**:
-- Excel形式のI/O一覧表を生成
-- 各テストケースの入力値と期待出力を整理
-
-**主要メソッド**:
-- `generate()`: I/O表を生成
-- `_create_worksheet()`: ワークシートを作成
-- `_format_cells()`: セルをフォーマット
-
----
-
-## データフロー
-
-```mermaid
-flowchart TD
-    A[ソースファイル] --> B[FileManager]
-    B --> C[Preprocessor]
-    C --> D[CParser]
-    D --> E[ParsedData]
-    
-    E --> F[BranchAnalyzer]
-    F --> G[Conditions]
-    
-    G --> H[MCDCTruthTableGenerator]
-    H --> I[TruthTableData]
-    
-    I --> J[UnityTestGenerator]
-    E --> J
-    
-    J --> K[MockGenerator]
-    J --> L[TestFunctionGenerator]
-    J --> M[PrototypeGenerator]
-    J --> N[CommentGenerator]
-    
-    K --> O[Mock Code]
-    L --> P[Test Functions]
-    M --> Q[Prototypes]
-    N --> R[Comments]
-    
-    O --> S[Unity Test Code]
-    P --> S
-    Q --> S
-    R --> S
-    
-    I --> T[IOTableGenerator]
-    T --> U[I/O Excel]
-    
-    I --> V[Truth Table Excel]
 ```
-
----
-
-## v2.6.2からv2.6.5での主な変更まとめ
-
-### v2.6.2: モック初期化の最適化
-
-**影響クラス**: `MockGenerator`
-
-**変更内容**:
-- グローバル変数宣言時の初期化（`= 0`）を削除
-- 初期化は`setUp()`の`reset_all_mocks()`のみで実施
-
-**効果**:
-- 初期化の重複を50%削減（2箇所 → 1箇所）
-- Unityベストプラクティスに完全準拠
-
----
-
-### v2.6.3: コメント形式修正 + 型定義追加
-
-**影響クラス**: `UnityTestGenerator`, `TestFunctionGenerator`
-
-**変更内容**:
-1. コメント形式を`/* */`から`//`に変更
-2. result変数に型定義を追加
-
-**効果**:
-- コンパイルエラーの解消
-- 型安全性の向上
-
----
-
-### v2.6.4: デフォルト値モック設定の削除
-
-**影響クラス**: `TestFunctionGenerator`
-
-**変更内容**:
-- デフォルト値（0）の場合はモック設定コードを生成しない
-- 0以外の値が必要な場合のみ設定コードを生成
-
-**効果**:
-- テスト関数の行数を約25%削減
-- 生成コードの総行数を約18%削減
-
----
-
-### v2.6.5: パラメータ変数の型定義追加
-
-**影響クラス**: `TestFunctionGenerator`
-
-**変更内容**:
-- パラメータのローカル変数にも型定義を追加
-- 構造体、基本型、ポインタを自動判定
-
-**効果**:
-- すべてのローカル変数に型定義が完備
-- コンパイルエラーの完全解消
+Input C File
+    ↓
+Preprocessor → (前処理済みコード)
+    ↓
+ASTBuilder → (AST)
+    ↓
+ConditionExtractor → (条件リスト)
+FunctionExtractor → (関数情報)
+TypedefExtractor → (型定義、構造体定義) 🆕v2.7
+    ↓
+ParsedData (統合データ)
+    ↓
+    ├→ TruthTableGenerator → TruthTableData → ExcelWriter → 真偽表.xlsx
+    │
+    ├→ UnityTestGenerator → TestCode → test_*.c
+    │   ├→ MockGenerator
+    │   ├→ TestFunctionGenerator (構造体判定使用) 🆕v2.7
+    │   ├→ PrototypeGenerator
+    │   └→ CommentGenerator
+    │
+    └→ IOTableGenerator → IOTableData → ExcelWriter → I/O表.xlsx
+```
 
 ---
 
 ## 設計原則
 
-### 1. 単一責任の原則（SRP）
-
-各クラスは明確な責任を持つ:
-- `MockGenerator`: モック関連のコード生成のみ
-- `TestFunctionGenerator`: テスト関数の生成のみ
-- `BoundaryValueCalculator`: 境界値計算のみ
-
-### 2. 依存性逆転の原則（DIP）
-
-- 高レベルモジュール（`UnityTestGenerator`）は低レベルモジュール（`MockGenerator`など）に依存
-- インターフェースではなく具象クラスに依存（Pythonの特性による）
-
-### 3. 開放閉鎖の原則（OCP）
-
-- 新しい機能追加時は既存コードを修正せず、クラスを追加
-- 例: `PrototypeGenerator`, `CommentGenerator`は独立したクラス
+1. **単一責任の原則**: 各クラスは1つの責務のみを持つ
+2. **依存性の注入**: コンストラクタで依存を注入
+3. **インターフェース分離**: 必要な機能のみを公開
+4. **開放閉鎖の原則**: 拡張に開いて、修正に閉じている
+5. **段階的な機能追加**: v2.7では構造体判定→将来メンバー情報活用
 
 ---
 
-## まとめ
+## 拡張性の考慮
 
-AutoUniTestGenは、明確な責任分離と段階的な処理フローにより、保守性と拡張性を確保しています。
+### v2.7での対応
+- 構造体型の判定機能
+- TODOコメントによる案内
 
-v2.6.2からv2.6.5にかけて、以下の改善を実施:
-- **v2.6.2**: モック初期化の最適化（MockGenerator）
-- **v2.6.3**: コメント形式修正と型定義追加（UnityTestGenerator, TestFunctionGenerator）
-- **v2.6.4**: デフォルト値モック設定の削除（TestFunctionGenerator）
-- **v2.6.5**: パラメータ変数の型定義追加（TestFunctionGenerator）
-
-これらの改善により、生成されるテストコードの品質が大幅に向上しました。
+### 将来のバージョンでの対応候補
+- 構造体メンバー情報の完全な抽出
+- メンバーごとの自動アサーション生成
+- ネストした構造体の対応
+- 共用体（union）の対応
+- ビットフィールドの高度な対応
 
 ---
 
-**最終更新**: 2025-11-20  
-**バージョン**: 2.6.5  
-**作成者**: Claude (Anthropic)
+**作成日**: 2025-11-20  
+**作成者**: AutoUniTestGen Development Team  
+**バージョン**: 2.7.0  
+**状態**: ✅ 最新

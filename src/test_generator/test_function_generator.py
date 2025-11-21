@@ -637,6 +637,41 @@ class TestFunctionGenerator:
         
         return default_value
     
+    def _is_struct_type(self, type_name: str) -> bool:
+        """
+        型が構造体かどうかを判定
+        
+        判定基準:
+        1. _t で終わる（typedef struct の命名規則）
+        2. 大文字で始まる（カスタム型の命名規則）
+        3. 'struct' キーワードが含まれる
+        
+        Args:
+            type_name: 型名
+        
+        Returns:
+            構造体の場合True
+        """
+        if not type_name:
+            return False
+        
+        # ポインタ記号を除去
+        clean_type = type_name.replace('*', '').strip()
+        
+        # _t で終わる（typedef struct の命名規則）
+        if clean_type.endswith('_t'):
+            return True
+        
+        # 大文字で始まる（カスタム型）
+        if clean_type and clean_type[0].isupper():
+            return True
+        
+        # struct キーワードが含まれる
+        if 'struct' in clean_type.lower():
+            return True
+        
+        return False
+    
     def _generate_assertions(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """
         アサーションコードを生成
@@ -650,12 +685,21 @@ class TestFunctionGenerator:
         """
         lines = []
         lines.append("    // 結果を確認")
+        lines.append("    // TODO: 期待値を設定してください")
         
         # 戻り値のチェック（void以外の場合）
         if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
-            expected_value = self._calculate_expected_return_value(test_case, parsed_data)
-            if expected_value is not None:
-                lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, result);")
+            return_type = parsed_data.function_info.return_type
+            
+            # 構造体型かチェック
+            if self._is_struct_type(return_type):
+                # 構造体の場合はTODOコメントで案内
+                lines.append("    // 例: TEST_ASSERT_EQUAL(expected_value, result.member_name);")
+            else:
+                # 基本型の場合
+                expected_value = self._calculate_expected_return_value(test_case, parsed_data)
+                if expected_value is not None:
+                    lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, result);")
         
         # グローバル変数のチェック
         for var in parsed_data.global_variables[:3]:  # 最初の3つ
@@ -666,14 +710,7 @@ class TestFunctionGenerator:
                 if expected_value is not None:
                     lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, {var});")
         
-        # アサーションが1つもない場合はTODOコメントを追加
-        if len(lines) == 1:
-            lines.append("    // TODO: 期待値を設定してください")
-            lines.append("    // 例: TEST_ASSERT_EQUAL(expected_value, actual_variable);")
-            lines.append("    // 例: TEST_ASSERT_TRUE(condition);")
-            lines.append("")
-        else:
-            lines.append("")
+        lines.append("")
         
         return '\n'.join(lines)
     

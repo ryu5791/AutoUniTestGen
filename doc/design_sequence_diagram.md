@@ -1,7 +1,7 @@
-# AutoUniTestGen シーケンス図 (v2.6.5)
+# AutoUniTestGen シーケンス図 (v2.7)
 
 **最終更新**: 2025-11-20  
-**バージョン**: 2.6.5
+**バージョン**: 2.7.0
 
 ---
 
@@ -9,11 +9,16 @@
 
 このドキュメントでは、AutoUniTestGenの処理フローをシーケンス図で説明します。
 
-v2.6.5では、以下の改善を実施しました：
-- v2.6.2: グローバル変数初期化の削除
-- v2.6.3: コメント形式修正、result変数型定義追加
-- v2.6.4: デフォルト値モック設定の削除
+v2.7では、以下の改善を予定しています：
+- 構造体型戻り値のアサーション生成処理の追加
+- 構造体判定ロジックの導入
+
+過去のバージョン履歴：
+- v2.6.6: 構造体アサーション問題の識別
 - v2.6.5: パラメータ変数型定義追加
+- v2.6.4: デフォルト値モック設定の削除
+- v2.6.3: コメント形式修正、result変数型定義追加
+- v2.6.2: グローバル変数初期化の削除
 
 ---
 
@@ -23,38 +28,52 @@ v2.6.5では、以下の改善を実施しました：
 sequenceDiagram
     participant User
     participant Main
-    participant FileManager
-    participant CParser
-    participant BranchAnalyzer
-    participant MCDCGenerator
+    participant CLI
+    participant CTestAutoGen
+    participant CCodeParser
+    participant TruthTableGen
     participant UnityTestGen
     participant IOTableGen
+    participant ExcelWriter
     
     User->>Main: python main.py -i source.c -f func -o output/
+    Main->>CLI: main()
     
-    Main->>FileManager: read_file("source.c")
-    FileManager-->>Main: source_code
+    CLI->>CLI: create_parser()
+    CLI->>CLI: parse arguments
+    CLI->>CTestAutoGen: new(config)
     
-    Main->>CParser: parse(source_code)
-    CParser-->>Main: parsed_data
+    CLI->>CTestAutoGen: generate_all(source.c, func, output/)
+    activate CTestAutoGen
     
-    Main->>BranchAnalyzer: analyze_branches(parsed_data)
-    BranchAnalyzer-->>Main: conditions
+    CTestAutoGen->>CCodeParser: parse(source.c, func)
+    activate CCodeParser
+    CCodeParser-->>CTestAutoGen: parsed_data
+    deactivate CCodeParser
     
-    Main->>MCDCGenerator: generate(conditions)
-    MCDCGenerator-->>Main: truth_table
+    CTestAutoGen->>TruthTableGen: generate(parsed_data)
+    activate TruthTableGen
+    TruthTableGen-->>CTestAutoGen: truth_table_data
+    deactivate TruthTableGen
     
-    Main->>UnityTestGen: generate(truth_table, parsed_data, source)
-    UnityTestGen-->>Main: test_code
+    CTestAutoGen->>UnityTestGen: generate(truth_table, parsed_data)
+    activate UnityTestGen
+    UnityTestGen-->>CTestAutoGen: test_code
+    deactivate UnityTestGen
     
-    Main->>IOTableGen: generate(truth_table, parsed_data)
-    IOTableGen-->>Main: io_table_excel
+    CTestAutoGen->>IOTableGen: generate(truth_table, parsed_data)
+    activate IOTableGen
+    IOTableGen-->>CTestAutoGen: io_table_data
+    deactivate IOTableGen
     
-    Main->>FileManager: write_file(test_code)
-    Main->>FileManager: write_file(truth_table_excel)
-    Main->>FileManager: write_file(io_table_excel)
+    CTestAutoGen->>ExcelWriter: write_truth_table(truth_table_data)
+    CTestAutoGen->>ExcelWriter: write_io_table(io_table_data)
+    CTestAutoGen->>CTestAutoGen: save test_code to file
     
-    FileManager-->>User: 生成完了
+    CTestAutoGen-->>CLI: generation_result
+    deactivate CTestAutoGen
+    
+    CLI-->>User: ✅ 生成成功
 ```
 
 ---
@@ -63,378 +82,420 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Main
-    participant FileManager
+    participant CTestAutoGen
+    participant CCodeParser
     participant Preprocessor
+    participant FileSystem
     
-    Main->>FileManager: read_file("source.c")
-    activate FileManager
+    CTestAutoGen->>CCodeParser: parse(source_file, target_function)
+    activate CCodeParser
     
-    FileManager->>FileManager: open file
-    FileManager->>Preprocessor: preprocess(source)
+    CCodeParser->>FileSystem: read file
+    FileSystem-->>CCodeParser: source_code
+    
+    CCodeParser->>Preprocessor: preprocess(source_code)
     activate Preprocessor
     
     Preprocessor->>Preprocessor: remove_comments()
     Preprocessor->>Preprocessor: expand_macros()
     Preprocessor->>Preprocessor: handle_directives()
+    Preprocessor->>Preprocessor: resolve_includes()
     
-    Preprocessor-->>FileManager: preprocessed_source
+    Preprocessor-->>CCodeParser: preprocessed_code
     deactivate Preprocessor
     
-    FileManager-->>Main: preprocessed_source
-    deactivate FileManager
+    CCodeParser-->>CTestAutoGen: preprocessed_code
+    deactivate CCodeParser
 ```
 
 ---
 
-## 詳細フロー2: 構文解析
+## 詳細フロー2: 構文解析とAST構築
 
 ```mermaid
 sequenceDiagram
-    participant Main
-    participant CParser
+    participant CCodeParser
+    participant ASTBuilder
+    participant ConditionExtractor
     participant FunctionExtractor
+    participant TypedefExtractor
     participant ParsedData
     
-    Main->>CParser: parse(source_code)
-    activate CParser
+    CCodeParser->>ASTBuilder: build(preprocessed_code)
+    activate ASTBuilder
     
-    CParser->>CParser: build_ast(source_code)
+    ASTBuilder->>ASTBuilder: parse_with_pycparser()
+    alt Parsing Success
+        ASTBuilder-->>CCodeParser: ast
+    else Parsing Failed
+        ASTBuilder->>ASTBuilder: handle_parse_error()
+        ASTBuilder->>ASTBuilder: fallback to regex parsing
+        ASTBuilder-->>CCodeParser: partial_ast
+    end
+    deactivate ASTBuilder
     
-    CParser->>FunctionExtractor: extract_function(source, func_name)
+    CCodeParser->>FunctionExtractor: extract_function_info(ast, target_function)
     activate FunctionExtractor
-    FunctionExtractor-->>CParser: function_info
+    FunctionExtractor-->>CCodeParser: function_info
     deactivate FunctionExtractor
     
-    CParser->>FunctionExtractor: extract_external_functions(source)
-    activate FunctionExtractor
-    FunctionExtractor-->>CParser: external_functions
-    deactivate FunctionExtractor
+    CCodeParser->>ConditionExtractor: extract(ast, target_function)
+    activate ConditionExtractor
+    ConditionExtractor->>ConditionExtractor: visit_if_stmt()
+    ConditionExtractor->>ConditionExtractor: visit_switch_stmt()
+    ConditionExtractor->>ConditionExtractor: classify_condition_type()
+    ConditionExtractor-->>CCodeParser: conditions
+    deactivate ConditionExtractor
     
-    CParser->>ParsedData: create(function_info, external_functions, ...)
-    activate ParsedData
-    ParsedData-->>CParser: parsed_data
-    deactivate ParsedData
+    CCodeParser->>TypedefExtractor: extract_typedefs(ast)
+    activate TypedefExtractor
+    TypedefExtractor->>TypedefExtractor: parse_typedef_node()
+    TypedefExtractor-->>CCodeParser: typedefs
+    deactivate TypedefExtractor
     
-    CParser-->>Main: parsed_data
-    deactivate CParser
+    Note over CCodeParser,TypedefExtractor: 🆕v2.7: 構造体定義の抽出
+    CCodeParser->>TypedefExtractor: extract_struct_definitions(ast)
+    activate TypedefExtractor
+    TypedefExtractor->>TypedefExtractor: parse_struct_node()
+    TypedefExtractor->>TypedefExtractor: extract_struct_members()
+    TypedefExtractor-->>CCodeParser: struct_definitions
+    deactivate TypedefExtractor
+    
+    CCodeParser->>ParsedData: new(function_info, conditions, typedefs, struct_definitions)
+    ParsedData-->>CCodeParser: parsed_data
+    
+    CCodeParser-->>CTestAutoGen: parsed_data
 ```
 
 ---
 
-## 詳細フロー3: Unityテストコード生成（v2.6.2-v2.6.5対応）
+## 詳細フロー3: MC/DC真偽表の生成
 
 ```mermaid
 sequenceDiagram
-    participant Main
+    participant CTestAutoGen
+    participant TruthTableGen
+    participant ConditionAnalyzer
+    participant MCDCPatternGen
+    participant TruthTableData
+    
+    CTestAutoGen->>TruthTableGen: generate(parsed_data)
+    activate TruthTableGen
+    
+    TruthTableGen->>ConditionAnalyzer: analyze(conditions)
+    activate ConditionAnalyzer
+    
+    ConditionAnalyzer->>ConditionAnalyzer: analyze_simple_condition()
+    ConditionAnalyzer->>ConditionAnalyzer: analyze_compound_condition()
+    ConditionAnalyzer->>ConditionAnalyzer: detect_dependencies()
+    
+    ConditionAnalyzer-->>TruthTableGen: analyzed_conditions
+    deactivate ConditionAnalyzer
+    
+    TruthTableGen->>MCDCPatternGen: generate(analyzed_conditions)
+    activate MCDCPatternGen
+    
+    loop For each condition
+        alt Simple IF
+            MCDCPatternGen->>MCDCPatternGen: generate_for_simple_if()
+        else OR Condition
+            MCDCPatternGen->>MCDCPatternGen: generate_for_or_condition()
+        else AND Condition
+            MCDCPatternGen->>MCDCPatternGen: generate_for_and_condition()
+        else SWITCH
+            MCDCPatternGen->>MCDCPatternGen: generate_for_switch()
+        end
+        
+        MCDCPatternGen->>MCDCPatternGen: calculate_mcdc_pairs()
+    end
+    
+    MCDCPatternGen-->>TruthTableGen: test_cases
+    deactivate MCDCPatternGen
+    
+    TruthTableGen->>TruthTableData: new(function_name, test_cases)
+    TruthTableData-->>TruthTableGen: truth_table_data
+    
+    TruthTableGen-->>CTestAutoGen: truth_table_data
+    deactivate TruthTableGen
+```
+
+---
+
+## 詳細フロー4: Unityテストコードの生成
+
+```mermaid
+sequenceDiagram
+    participant CTestAutoGen
     participant UnityTestGen
     participant MockGen
     participant TestFuncGen
     participant ProtoGen
     participant CommentGen
     participant CodeExtractor
+    participant TestCode
     
-    Main->>UnityTestGen: generate(truth_table, parsed_data, source)
+    CTestAutoGen->>UnityTestGen: generate(truth_table, parsed_data, source)
     activate UnityTestGen
     
-    Note over UnityTestGen: v2.6.3: コメント形式を // に変更
     UnityTestGen->>UnityTestGen: _generate_includes()
-    UnityTestGen->>CodeExtractor: extract_type_definitions(source)
-    CodeExtractor-->>UnityTestGen: type_defs
+    UnityTestGen->>UnityTestGen: _generate_type_definitions(parsed_data)
     
-    UnityTestGen->>CodeExtractor: extract_function_body(source, func_name)
-    CodeExtractor-->>UnityTestGen: function_body
+    UnityTestGen->>ProtoGen: generate_prototypes(parsed_data)
+    activate ProtoGen
+    ProtoGen-->>UnityTestGen: prototypes
+    deactivate ProtoGen
     
-    Note over UnityTestGen,MockGen: v2.6.2: グローバル変数初期化削除
     UnityTestGen->>MockGen: generate_mocks(parsed_data)
     activate MockGen
-    
     MockGen->>MockGen: generate_mock_variables()
-    Note right of MockGen: v2.6.2: = 0 を削除<br/>static int mock_count;
-    
     MockGen->>MockGen: generate_mock_functions()
     MockGen->>MockGen: generate_reset_function()
-    Note right of MockGen: reset_all_mocks()で初期化
-    
-    MockGen-->>UnityTestGen: mock_code
+    MockGen-->>UnityTestGen: mocks
     deactivate MockGen
     
-    UnityTestGen->>UnityTestGen: _generate_setup_teardown()
-    Note right of UnityTestGen: setUp()でreset_all_mocks()呼び出し
-    
-    Note over UnityTestGen,TestFuncGen: v2.6.3,v2.6.4,v2.6.5: 変数型定義とモック設定最適化
     UnityTestGen->>TestFuncGen: generate_test_functions(truth_table, parsed_data)
     activate TestFuncGen
     
-    loop 各テストケース
-        TestFuncGen->>TestFuncGen: _generate_test_function(test_case, parsed_data)
+    loop For each test_case in truth_table
+        TestFuncGen->>TestFuncGen: _generate_test_function(test_case)
+        TestFuncGen->>CommentGen: generate_test_comment(test_case)
+        activate CommentGen
+        CommentGen-->>TestFuncGen: comment
+        deactivate CommentGen
         
-        Note over TestFuncGen: v2.6.3,v2.6.5: 変数に型定義追加
-        TestFuncGen->>TestFuncGen: _generate_variable_init(test_case, parsed_data)
-        Note right of TestFuncGen: v2.6.3: result変数に型定義<br/>state_def_t result = {0};<br/>v2.6.5: パラメータにも型定義<br/>int count = 0;
+        TestFuncGen->>TestFuncGen: _generate_function_name()
+        TestFuncGen->>TestFuncGen: _generate_variable_init()
+        TestFuncGen->>TestFuncGen: _generate_mock_setup()
+        TestFuncGen->>TestFuncGen: _generate_function_call()
         
-        Note over TestFuncGen: v2.6.4: デフォルト値は設定しない
-        TestFuncGen->>TestFuncGen: _generate_mock_setup(test_case, parsed_data)
-        Note right of TestFuncGen: v2.6.4: 0以外の値のみ設定<br/>if return_value != "0"
-        
-        TestFuncGen->>TestFuncGen: _generate_function_call(parsed_data)
+        Note over TestFuncGen: 🆕v2.7: 構造体型対応
         TestFuncGen->>TestFuncGen: _generate_assertions(test_case, parsed_data)
+        activate TestFuncGen
+        
+        alt return_type is struct
+            TestFuncGen->>TestFuncGen: _is_struct_type(return_type)
+            TestFuncGen->>TestFuncGen: _get_struct_members(return_type, parsed_data)
+            TestFuncGen->>TestFuncGen: generate TODO comment
+        else return_type is basic
+            TestFuncGen->>TestFuncGen: generate TEST_ASSERT_EQUAL
+        end
+        
+        deactivate TestFuncGen
     end
     
     TestFuncGen-->>UnityTestGen: test_functions
     deactivate TestFuncGen
     
-    UnityTestGen->>ProtoGen: generate_prototypes(truth_table)
-    ProtoGen-->>UnityTestGen: prototypes
+    UnityTestGen->>UnityTestGen: _generate_setup_teardown()
     
-    UnityTestGen->>CommentGen: generate_test_comment(test_case)
-    CommentGen-->>UnityTestGen: comments
+    UnityTestGen->>CodeExtractor: extract_function_body(source)
+    activate CodeExtractor
+    CodeExtractor-->>UnityTestGen: target_function_code
+    deactivate CodeExtractor
     
-    UnityTestGen->>UnityTestGen: _generate_main_function()
+    UnityTestGen->>UnityTestGen: _generate_main_function(truth_table)
     
-    UnityTestGen-->>Main: test_code
+    UnityTestGen->>TestCode: new(includes, mocks, test_functions, ...)
+    TestCode-->>UnityTestGen: test_code
+    
+    UnityTestGen-->>CTestAutoGen: test_code
     deactivate UnityTestGen
 ```
 
 ---
 
-## 詳細フロー4: モックコード生成（v2.6.2で更新）
+## 詳細フロー5: テスト関数の生成（構造体対応） 🆕v2.7
 
 ```mermaid
 sequenceDiagram
-    participant UnityTestGen
-    participant MockGen
+    participant TestFuncGen as TestFunctionGenerator
     participant ParsedData
+    participant StructDef as StructDefinition
     
-    UnityTestGen->>MockGen: generate_mocks(parsed_data)
-    activate MockGen
+    Note over TestFuncGen: テスト関数生成開始
     
-    MockGen->>ParsedData: external_functions
-    ParsedData-->>MockGen: ["func1", "func2", ...]
+    TestFuncGen->>TestFuncGen: _generate_function_name(test_case)
+    TestFuncGen->>TestFuncGen: _generate_variable_init(test_case, parsed_data)
     
-    Note over MockGen: v2.6.2: 初期化を削除
-    MockGen->>MockGen: generate_mock_variables()
-    Note right of MockGen: // グローバル変数（初期化なし）<br/>static uint16_t mock_func1_return_value;<br/>static int mock_func1_call_count;
+    Note over TestFuncGen: 戻り値の型をチェック
+    TestFuncGen->>TestFuncGen: get return_type from parsed_data.function_info
     
-    MockGen->>MockGen: generate_mock_functions()
-    Note right of MockGen: // モック関数実装<br/>uint16_t func1(void) {<br/>  mock_func1_call_count++;<br/>  return mock_func1_return_value;<br/>}
-    
-    MockGen->>MockGen: generate_reset_function()
-    Note right of MockGen: // 初期化関数<br/>static void reset_all_mocks(void) {<br/>  mock_func1_return_value = 0;<br/>  mock_func1_call_count = 0;<br/>}
-    
-    MockGen-->>UnityTestGen: mock_code
-    deactivate MockGen
-```
-
----
-
-## 詳細フロー5: テスト関数生成（v2.6.3, v2.6.4, v2.6.5で更新）
-
-```mermaid
-sequenceDiagram
-    participant UnityTestGen
-    participant TestFuncGen
-    participant BoundaryCalc
-    participant TestCase
-    
-    UnityTestGen->>TestFuncGen: generate_test_functions(truth_table, parsed_data)
-    activate TestFuncGen
-    
-    loop 各テストケース
-        TestFuncGen->>TestCase: get test_case
-        TestCase-->>TestFuncGen: test_case_data
+    alt return_type is void
+        TestFuncGen->>TestFuncGen: skip result variable
+    else return_type is not void
+        TestFuncGen->>TestFuncGen: _is_struct_type(return_type)
         
-        TestFuncGen->>TestFuncGen: _generate_function_name(condition, truth)
-        Note right of TestFuncGen: test_01_condition_T
-        
-        Note over TestFuncGen: v2.6.3: result変数に型定義<br/>v2.6.5: パラメータにも型定義
-        TestFuncGen->>TestFuncGen: _generate_variable_init(test_case, parsed_data)
-        Note right of TestFuncGen: v2.6.3:<br/>state_def_t result = {0};<br/><br/>v2.6.5:<br/>state_def_t inState = {0};<br/>int count = 0;
-        
-        TestFuncGen->>BoundaryCalc: generate_test_value(condition, truth)
-        BoundaryCalc-->>TestFuncGen: test_value
-        
-        Note over TestFuncGen: v2.6.4: デフォルト値は設定しない
-        TestFuncGen->>TestFuncGen: _generate_mock_setup(test_case, parsed_data)
-        Note right of TestFuncGen: v2.6.4:<br/>デフォルト値（0）の場合は<br/>モック設定セクション自体を削除<br/><br/>0以外の値の場合のみ:<br/>mock_func_return_value = 1;
-        
-        TestFuncGen->>TestFuncGen: _generate_function_call(parsed_data)
-        Note right of TestFuncGen: test_func_with_params();
-        
-        TestFuncGen->>TestFuncGen: _generate_assertions(test_case, parsed_data)
-        Note right of TestFuncGen: TEST_ASSERT_EQUAL(...);<br/>TEST_ASSERT_TRUE(...);
+        alt is struct type
+            Note over TestFuncGen: 構造体の場合
+            TestFuncGen->>TestFuncGen: generate: {return_type} result = {0};
+            
+            TestFuncGen->>TestFuncGen: _generate_assertions()
+            activate TestFuncGen
+            
+            TestFuncGen->>ParsedData: get struct_definitions
+            ParsedData-->>TestFuncGen: struct_definitions
+            
+            TestFuncGen->>TestFuncGen: find struct by return_type
+            
+            alt struct members found
+                TestFuncGen->>StructDef: get members
+                StructDef-->>TestFuncGen: List[StructMember]
+                
+                loop For each member
+                    TestFuncGen->>TestFuncGen: generate: TEST_ASSERT_EQUAL(0, result.{member});
+                end
+            else struct members not found
+                TestFuncGen->>TestFuncGen: generate TODO comment
+                Note right of TestFuncGen: // TODO: 構造体のメンバーごとに<br/>期待値を設定してください<br/>// 例: TEST_ASSERT_EQUAL(expected, result.member);
+            end
+            
+            deactivate TestFuncGen
+            
+        else is basic type
+            Note over TestFuncGen: 基本型の場合
+            TestFuncGen->>TestFuncGen: generate: {return_type} result = 0;
+            TestFuncGen->>TestFuncGen: generate: TEST_ASSERT_EQUAL(0, result);
+        end
     end
     
-    TestFuncGen-->>UnityTestGen: test_functions
-    deactivate TestFuncGen
+    TestFuncGen->>TestFuncGen: combine all sections
+    TestFuncGen-->>TestFuncGen: complete test function
 ```
 
 ---
 
-## 詳細フロー6: 真偽表生成（MC/DC）
+## 詳細フロー6: I/O表の生成
 
 ```mermaid
 sequenceDiagram
-    participant Main
-    participant MCDCGenerator
-    participant BranchAnalyzer
-    participant TruthTableData
-    
-    Main->>MCDCGenerator: generate(parsed_data)
-    activate MCDCGenerator
-    
-    MCDCGenerator->>BranchAnalyzer: get conditions
-    BranchAnalyzer-->>MCDCGenerator: conditions
-    
-    MCDCGenerator->>MCDCGenerator: _generate_combinations(conditions)
-    Note right of MCDCGenerator: すべての条件の組み合わせを生成
-    
-    MCDCGenerator->>MCDCGenerator: _check_mcdc_coverage(combinations)
-    Note right of MCDCGenerator: MC/DCカバレッジを検証<br/>100%達成まで組み合わせを追加
-    
-    MCDCGenerator->>TruthTableData: create(test_cases, coverage_rate)
-    TruthTableData-->>MCDCGenerator: truth_table_data
-    
-    MCDCGenerator-->>Main: truth_table_data
-    deactivate MCDCGenerator
-```
-
----
-
-## 詳細フロー7: I/O表生成
-
-```mermaid
-sequenceDiagram
-    participant Main
+    participant CTestAutoGen
     participant IOTableGen
-    participant TruthTableData
-    participant ExcelWriter
+    participant VariableExtractor
+    participant IOTableData
     
-    Main->>IOTableGen: generate(truth_table, parsed_data)
+    CTestAutoGen->>IOTableGen: generate(truth_table, parsed_data)
     activate IOTableGen
     
-    IOTableGen->>TruthTableData: get test_cases
-    TruthTableData-->>IOTableGen: test_cases
+    IOTableGen->>VariableExtractor: extract_io_variables(parsed_data)
+    activate VariableExtractor
     
-    IOTableGen->>IOTableGen: _create_worksheet(truth_table)
-    Note right of IOTableGen: ワークシート作成<br/>ヘッダー行を追加
+    VariableExtractor->>VariableExtractor: extract_input_variables()
+    VariableExtractor->>VariableExtractor: extract_output_variables()
+    VariableExtractor->>VariableExtractor: classify_variable_roles()
     
-    loop 各テストケース
-        IOTableGen->>IOTableGen: add_row(test_case)
-        Note right of IOTableGen: テストケースID<br/>条件式<br/>真偽<br/>入力値<br/>期待出力
+    VariableExtractor-->>IOTableGen: io_variables
+    deactivate VariableExtractor
+    
+    loop For each test_case in truth_table
+        IOTableGen->>IOTableGen: map_test_case_to_io(test_case, io_variables)
+        IOTableGen->>IOTableGen: infer_input_values(test_case)
+        IOTableGen->>IOTableGen: infer_output_values(test_case)
     end
     
-    IOTableGen->>IOTableGen: _format_cells(worksheet)
-    Note right of IOTableGen: セルの書式設定<br/>罫線、色、幅調整
+    IOTableGen->>IOTableData: new(function_name, io_variables, test_entries)
+    IOTableData-->>IOTableGen: io_table_data
     
-    IOTableGen->>ExcelWriter: save(filename)
-    ExcelWriter-->>IOTableGen: saved
-    
-    IOTableGen-->>Main: excel_file
+    IOTableGen-->>CTestAutoGen: io_table_data
     deactivate IOTableGen
 ```
 
 ---
 
-## v2.6.2からv2.6.5での処理フロー変更点
-
-### v2.6.2: モック初期化の最適化
+## 詳細フロー7: Excelファイルの出力
 
 ```mermaid
 sequenceDiagram
-    participant MockGen
-    participant UnityTestGen
-    participant TestExecution
+    participant CTestAutoGen
+    participant ExcelWriter
+    participant openpyxl
+    participant FileSystem
     
-    Note over MockGen: v2.6.2での変更
+    CTestAutoGen->>ExcelWriter: write_truth_table(truth_table_data, path)
+    activate ExcelWriter
     
-    MockGen->>MockGen: generate_mock_variables()
-    Note right of MockGen: Before v2.6.2:<br/>static int mock_count = 0;<br/><br/>After v2.6.2:<br/>static int mock_count;
+    ExcelWriter->>openpyxl: Workbook()
+    openpyxl-->>ExcelWriter: workbook
     
-    MockGen->>MockGen: generate_reset_function()
-    Note right of MockGen: 変更なし:<br/>static void reset_all_mocks(void) {<br/>  mock_count = 0;<br/>}
+    ExcelWriter->>ExcelWriter: create_worksheet("真偽表")
+    ExcelWriter->>ExcelWriter: format_header_row()
     
-    UnityTestGen->>UnityTestGen: _generate_setup_teardown()
-    Note right of UnityTestGen: 変更なし:<br/>void setUp(void) {<br/>  reset_all_mocks();<br/>}
+    loop For each test_case
+        ExcelWriter->>ExcelWriter: format_data_row(test_case)
+    end
     
-    Note over TestExecution: 実行時の初期化フロー
-    TestExecution->>TestExecution: プログラム起動
-    Note right of TestExecution: グローバル変数宣言<br/>（初期化なし、値は不定）
+    ExcelWriter->>openpyxl: save(path)
+    openpyxl->>FileSystem: write file
     
-    TestExecution->>TestExecution: test_01実行
-    TestExecution->>TestExecution: setUp()
-    TestExecution->>TestExecution: reset_all_mocks()
-    Note right of TestExecution: ここで初期化（1回のみ）<br/>mock_count = 0;
+    ExcelWriter-->>CTestAutoGen: success
+    deactivate ExcelWriter
+    
+    CTestAutoGen->>ExcelWriter: write_io_table(io_table_data, path)
+    activate ExcelWriter
+    
+    ExcelWriter->>openpyxl: Workbook()
+    openpyxl-->>ExcelWriter: workbook
+    
+    ExcelWriter->>ExcelWriter: create_worksheet("I/O一覧")
+    ExcelWriter->>ExcelWriter: format_header_row()
+    
+    loop For each io_entry
+        ExcelWriter->>ExcelWriter: format_data_row(io_entry)
+    end
+    
+    ExcelWriter->>openpyxl: save(path)
+    openpyxl->>FileSystem: write file
+    
+    ExcelWriter-->>CTestAutoGen: success
+    deactivate ExcelWriter
 ```
 
-### v2.6.3: コメント形式修正 + 型定義追加
+---
+
+## バッチ処理フロー
 
 ```mermaid
 sequenceDiagram
-    participant UnityTestGen
-    participant TestFuncGen
+    participant User
+    participant CLI
+    participant BatchProcessor
+    participant CTestAutoGen
+    participant ThreadPool
     
-    Note over UnityTestGen,TestFuncGen: v2.6.3での変更
+    User->>CLI: python main.py --batch config.json --parallel --workers 4
+    CLI->>CLI: parse arguments
+    CLI->>BatchProcessor: new(config)
     
-    UnityTestGen->>UnityTestGen: _generate_standalone_test()
-    Note right of UnityTestGen: コメント形式変更:<br/>Before: /* 以下、自動生成 */<br/>After: // 以下、自動生成
+    CLI->>BatchProcessor: process_batch(config.json)
+    activate BatchProcessor
     
-    TestFuncGen->>TestFuncGen: _generate_variable_init()
-    Note right of TestFuncGen: result変数に型定義追加:<br/>Before: result = 0;<br/>After: state_def_t result = {0};
-```
-
-### v2.6.4: デフォルト値モック設定の削除
-
-```mermaid
-sequenceDiagram
-    participant TestFuncGen
-    participant BoundaryCalc
+    BatchProcessor->>BatchProcessor: load_batch_config()
+    BatchProcessor->>BatchProcessor: validate_tasks()
     
-    Note over TestFuncGen,BoundaryCalc: v2.6.4での変更
-    
-    TestFuncGen->>TestFuncGen: _generate_mock_setup()
-    
-    loop 各モック関数
-        TestFuncGen->>BoundaryCalc: _determine_mock_return_value()
-        BoundaryCalc-->>TestFuncGen: return_value
+    alt Parallel Mode
+        BatchProcessor->>ThreadPool: create pool (workers=4)
         
-        alt return_value == "0"
-            Note right of TestFuncGen: v2.6.4: 設定コード生成しない<br/>（デフォルト値なので不要）
-        else return_value != "0"
-            Note right of TestFuncGen: 設定コード生成:<br/>mock_func_return_value = 1;
+        loop For each task
+            BatchProcessor->>ThreadPool: submit(process_single, task)
+        end
+        
+        loop For each future
+            ThreadPool->>CTestAutoGen: generate_all(...)
+            CTestAutoGen-->>ThreadPool: result
+            ThreadPool-->>BatchProcessor: result
+        end
+        
+    else Sequential Mode
+        loop For each task
+            BatchProcessor->>CTestAutoGen: generate_all(...)
+            CTestAutoGen-->>BatchProcessor: result
         end
     end
     
-    Note right of TestFuncGen: Before v2.6.4:<br/>常に全モックを設定<br/>（27個のモック全て）<br/><br/>After v2.6.4:<br/>必要な場合のみ設定<br/>（0以外の値のみ）
-```
-
-### v2.6.5: パラメータ変数の型定義追加
-
-```mermaid
-sequenceDiagram
-    participant TestFuncGen
-    participant ParsedData
+    BatchProcessor->>BatchProcessor: aggregate_results()
+    BatchProcessor-->>CLI: List[GenerationResult]
+    deactivate BatchProcessor
     
-    Note over TestFuncGen,ParsedData: v2.6.5での変更
-    
-    TestFuncGen->>TestFuncGen: _generate_variable_init()
-    
-    TestFuncGen->>ParsedData: get function_info.parameters
-    ParsedData-->>TestFuncGen: parameters
-    
-    loop 各パラメータ
-        TestFuncGen->>TestFuncGen: 型を判定
-        
-        alt 構造体型（_t含む or 大文字開始）
-            Note right of TestFuncGen: v2.6.5:<br/>state_def_t inState = {0};
-        else ポインタ型（*含む）
-            Note right of TestFuncGen: v2.6.5:<br/>uint8_t* ptr = NULL;
-        else 基本型
-            Note right of TestFuncGen: v2.6.5:<br/>int count = 0;
-        end
-    end
-    
-    Note right of TestFuncGen: Before v2.6.5:<br/>inState = 0; ❌<br/>count = 0; ❌<br/><br/>After v2.6.5:<br/>state_def_t inState = {0}; ✅<br/>int count = 0; ✅
+    CLI-->>User: ✅ バッチ処理完了
 ```
 
 ---
@@ -443,77 +504,160 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Main
     participant Component
+    participant ErrorHandler
     participant Logger
     participant User
     
-    Main->>Component: process()
+    Component->>Component: execute operation
     
-    alt 正常処理
-        Component-->>Main: success
-        Main->>User: 生成完了メッセージ
-    else エラー発生
-        Component->>Logger: log_error(message)
-        Logger-->>Component: logged
-        Component-->>Main: error
-        Main->>User: エラーメッセージ
-        Main->>User: トラブルシューティング情報
+    alt Operation Failed
+        Component->>ErrorHandler: handle_error(error, level)
+        activate ErrorHandler
+        
+        ErrorHandler->>ErrorHandler: format_error_message(error)
+        ErrorHandler->>ErrorHandler: determine_severity(level)
+        
+        ErrorHandler->>Logger: log(message, level)
+        activate Logger
+        Logger->>Logger: write to log file
+        Logger-->>ErrorHandler: logged
+        deactivate Logger
+        
+        alt Critical Error
+            ErrorHandler->>ErrorHandler: prepare detailed report
+            ErrorHandler-->>User: ❌ Critical Error: {details}
+        else Warning
+            ErrorHandler-->>User: ⚠️ Warning: {message}
+        else Info
+            ErrorHandler-->>User: ℹ️ Info: {message}
+        end
+        
+        ErrorHandler-->>Component: error handled
+        deactivate ErrorHandler
     end
 ```
 
 ---
 
-## 並行処理（将来の拡張）
-
-現在は逐次処理ですが、将来的に以下の並行処理が可能です：
+## パフォーマンス監視フロー
 
 ```mermaid
 sequenceDiagram
-    participant Main
-    participant Parser
-    participant MCDCGen
-    participant IOTableGen
+    participant CLI
+    participant PerfMonitor as PerformanceMonitor
+    participant MemMonitor as MemoryMonitor
+    participant CTestAutoGen
     
-    Main->>Parser: parse() [async]
-    activate Parser
+    CLI->>PerfMonitor: start_timer("total")
+    CLI->>MemMonitor: log_memory_snapshot("start")
     
-    par 並行処理
-        Parser-->>Main: parsed_data
-        deactivate Parser
-        Main->>MCDCGen: generate() [async]
-        activate MCDCGen
-    and
-        Main->>IOTableGen: generate() [async]
-        activate IOTableGen
-    end
+    CLI->>CTestAutoGen: generate_all(...)
+    activate CTestAutoGen
     
-    MCDCGen-->>Main: truth_table
-    deactivate MCDCGen
-    IOTableGen-->>Main: io_table
-    deactivate IOTableGen
+    CTestAutoGen->>PerfMonitor: start_timer("parsing")
+    Note over CTestAutoGen: Parsing...
+    CTestAutoGen->>PerfMonitor: stop_timer("parsing")
+    
+    CTestAutoGen->>PerfMonitor: start_timer("truth_table")
+    Note over CTestAutoGen: Truth table generation...
+    CTestAutoGen->>PerfMonitor: stop_timer("truth_table")
+    
+    CTestAutoGen->>PerfMonitor: start_timer("test_generation")
+    Note over CTestAutoGen: Test generation...
+    CTestAutoGen->>PerfMonitor: stop_timer("test_generation")
+    
+    CTestAutoGen-->>CLI: result
+    deactivate CTestAutoGen
+    
+    CLI->>PerfMonitor: stop_timer("total")
+    CLI->>MemMonitor: log_memory_snapshot("end")
+    
+    CLI->>PerfMonitor: get_metrics()
+    PerfMonitor-->>CLI: metrics
+    
+    CLI->>MemMonitor: get_peak_memory()
+    MemMonitor-->>CLI: peak_memory
+    
+    CLI->>CLI: display performance report
+    CLI-->>User: Performance Report:<br/>- Total: 2.5s<br/>- Parsing: 0.5s<br/>- Truth Table: 0.8s<br/>- Test Gen: 1.2s<br/>- Peak Memory: 150MB
 ```
 
 ---
 
-## まとめ
+## v2.7での主要な変更点
 
-AutoUniTestGenの処理フローは以下の特徴を持ちます：
+### 構造体型アサーション生成フロー（新規追加）
 
-1. **段階的処理**: 各ステップが明確に分離されている
-2. **モジュール性**: 各コンポーネントが独立して動作
-3. **拡張性**: 新しい機能を追加しやすい設計
+v2.7では、`TestFunctionGenerator._generate_assertions()`メソッドに以下の処理が追加されます：
 
-v2.6.2からv2.6.5にかけて、以下の改善を実施：
-- **v2.6.2**: モック初期化フローの最適化
-- **v2.6.3**: コメント形式と型定義の改善
-- **v2.6.4**: モック設定ロジックの最適化
-- **v2.6.5**: パラメータ変数の型定義完備
+1. **戻り値の型チェック**
+   - `parsed_data.function_info.return_type`を取得
+   
+2. **構造体判定**
+   - `_is_struct_type(return_type)`を呼び出し
+   - 型名から構造体かどうかを判定
+   
+3. **構造体の場合の処理**
+   - `parsed_data.struct_definitions`から構造体定義を検索
+   - メンバー情報が取得できた場合：
+     - 各メンバーごとに`TEST_ASSERT_EQUAL`を生成
+   - メンバー情報が取得できない場合：
+     - TODOコメントを生成
+   
+4. **基本型の場合の処理**
+   - 従来通りのアサーション生成
 
-これらの改善により、生成されるコードの品質とコンパイル成功率が大幅に向上しました。
+### データフロー変更
+
+```
+TypedefExtractor
+    ↓ (v2.7で追加)
+extract_struct_definitions()
+    ↓
+StructDefinition[] → ParsedData
+    ↓
+UnityTestGenerator
+    ↓
+TestFunctionGenerator
+    ↓
+_generate_assertions()
+    ↓
+_is_struct_type() → bool
+    ↓
+_get_struct_members() → List[StructMember]
+    ↓
+generate assertions or TODO comments
+```
 
 ---
 
-**最終更新**: 2025-11-20  
-**バージョン**: 2.6.5  
-**作成者**: Claude (Anthropic)
+## 主要な処理時間の目安
+
+| フェーズ | 処理時間 | 備考 |
+|---------|---------|------|
+| ファイル読み込み | 10-50ms | ファイルサイズに依存 |
+| 前処理 | 50-200ms | マクロ展開、コメント除去 |
+| AST構築 | 100-500ms | コードの複雑さに依存 |
+| 条件抽出 | 50-200ms | 条件分岐の数に依存 |
+| 真偽表生成 | 200-1000ms | MC/DCパターン計算 |
+| テスト生成 | 300-1500ms | テストケース数に依存 |
+| Excel出力 | 100-300ms | データ量に依存 |
+| **合計** | **0.8-3.8秒** | 標準的なケース |
+
+---
+
+## 設計の特徴
+
+1. **レイヤー化されたアーキテクチャ**: 各レイヤーが独立して動作
+2. **依存性の注入**: コンポーネント間の疎結合
+3. **エラーハンドリングの一元化**: ErrorHandlerによる集中管理
+4. **段階的な処理**: 各ステップが明確に分離
+5. **拡張性**: 新機能（構造体対応など）が追加しやすい構造
+
+---
+
+**作成日**: 2025-11-20  
+**作成者**: AutoUniTestGen Development Team  
+**バージョン**: 2.7.0  
+**状態**: ✅ 最新
