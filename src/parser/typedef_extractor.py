@@ -565,7 +565,7 @@ class TypedefExtractor:
     
     def extract_struct_definitions(self, ast) -> List[StructDefinition]:
         """
-        ASTから構造体定義を抽出 (v2.8.0で追加)
+        ASTから構造体定義を抽出 (v2.8.0で追加, v2.9.0で2パス処理に改良)
         
         Args:
             ast: pycparserのAST
@@ -579,21 +579,32 @@ class TypedefExtractor:
             return struct_defs
         
         try:
-            # ASTを走査して構造体定義を検索
+            # ===== 第1パス: すべての構造体定義を収集 =====
             for node in self._walk_ast(ast):
                 # Typedef -> Struct のパターン
                 if self._is_typedef_struct(node):
-                    struct_def = self._parse_typedef_struct(node)
+                    struct_def = self._parse_typedef_struct(node, resolve_types=False)
                     if struct_def:
                         struct_defs.append(struct_def)
-                        self.logger.debug(f"構造体定義を抽出: {struct_def.name}")
+                        self.logger.debug(f"構造体定義を抽出（第1パス）: {struct_def.name}")
                 
                 # 直接の構造体定義
                 elif self._is_direct_struct(node):
-                    struct_def = self._parse_direct_struct(node)
+                    struct_def = self._parse_direct_struct(node, resolve_types=False)
                     if struct_def:
                         struct_defs.append(struct_def)
-                        self.logger.debug(f"構造体定義を抽出: {struct_def.name}")
+                        self.logger.debug(f"構造体定義を抽出（第1パス）: {struct_def.name}")
+            
+            # ===== 構造体マップを作成 =====
+            struct_map = {s.name: s for s in struct_defs}
+            
+            # ===== 第2パス: 型参照を解決 =====
+            for struct_def in struct_defs:
+                for member in struct_def.members:
+                    # メンバーの型が構造体型の場合、nested_structを設定
+                    if member.type in struct_map:
+                        member.nested_struct = struct_map[member.type]
+                        self.logger.debug(f"型参照を解決: {struct_def.name}.{member.name} -> {member.type}")
         
         except Exception as e:
             self.logger.error(f"構造体定義の抽出中にエラー: {e}")
@@ -643,12 +654,13 @@ class TypedefExtractor:
             pass
         return False
     
-    def _parse_typedef_struct(self, node) -> Optional[StructDefinition]:
+    def _parse_typedef_struct(self, node, resolve_types=True) -> Optional[StructDefinition]:
         """
         Typedefされた構造体を解析
         
         Args:
             node: ASTノード (Typedef)
+            resolve_types: 型解決を行うかどうか（v2.9.0で追加）
         
         Returns:
             StructDefinition
@@ -677,7 +689,7 @@ class TypedefExtractor:
             if hasattr(struct_node, 'name') and struct_node.name:
                 original_name = struct_node.name
             
-            # メンバーを抽出
+            # メンバーを抽出（resolve_typesパラメータは現時点では使用しない）
             members = self._extract_struct_members(struct_node)
             
             return StructDefinition(
@@ -691,12 +703,13 @@ class TypedefExtractor:
             self.logger.error(f"構造体解析エラー: {e}")
             return None
     
-    def _parse_direct_struct(self, node) -> Optional[StructDefinition]:
+    def _parse_direct_struct(self, node, resolve_types=True) -> Optional[StructDefinition]:
         """
         直接の構造体定義を解析
         
         Args:
             node: ASTノード (Decl)
+            resolve_types: 型解決を行うかどうか（v2.9.0で追加）
         
         Returns:
             StructDefinition
@@ -709,7 +722,7 @@ class TypedefExtractor:
             if not struct_name:
                 return None
             
-            # メンバーを抽出
+            # メンバーを抽出（resolve_typesパラメータは現時点では使用しない）
             members = self._extract_struct_members(struct_node)
             
             return StructDefinition(
