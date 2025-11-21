@@ -16,6 +16,7 @@ from .truth_table.truth_table_generator import TruthTableGenerator
 from .test_generator.unity_test_generator import UnityTestGenerator
 from .io_table.io_table_generator import IOTableGenerator
 from .output.excel_writer import ExcelWriter
+from .encoding_config import get_output_encoding
 
 # 出力ディレクトリ管理をインライン関数として定義
 def get_unique_output_dir(base_dir: str) -> Path:
@@ -214,8 +215,9 @@ class CTestAutoGenerator:
                 standalone_code = self.test_generator.generate_standalone(
                     truth_table, parsed_data, source_code
                 )
-                # スタンドアロン版をファイルに保存
-                with open(str(test_code_path), 'w', encoding='shift_jis') as f:
+                # スタンドアロン版をファイルに保存（設定されたエンコーディングを使用）
+                encoding = get_output_encoding()
+                with open(str(test_code_path), 'w', encoding=encoding, errors='ignore') as f:
                     f.write(standalone_code)
                 result.test_code_path = test_code_path
                 print(f"   ✓ スタンドアロン版テストコード生成完了")
