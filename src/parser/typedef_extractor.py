@@ -7,12 +7,13 @@ C言語ソースファイルから型定義(typedef)を抽出する
 import re
 import sys
 import os
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Any
 from dataclasses import dataclass
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger
+from src.data_structures import StructDefinition, StructMember
 
 try:
     from pycparser import c_ast
@@ -561,3 +562,288 @@ class TypedefExtractor:
             typedef名の集合
         """
         return {td.name for td in self.typedefs}
+    
+    def extract_struct_definitions(self, ast) -> List[StructDefinition]:
+        """
+        ASTから構造体定義を抽出 (v2.8.0で追加)
+        
+        Args:
+            ast: pycparserのAST
+        
+        Returns:
+            構造体定義のリスト
+        """
+        struct_defs = []
+        
+        if not ast:
+            return struct_defs
+        
+        try:
+            # ASTを走査して構造体定義を検索
+            for node in self._walk_ast(ast):
+                # Typedef -> Struct のパターン
+                if self._is_typedef_struct(node):
+                    struct_def = self._parse_typedef_struct(node)
+                    if struct_def:
+                        struct_defs.append(struct_def)
+                        self.logger.debug(f"構造体定義を抽出: {struct_def.name}")
+                
+                # 直接の構造体定義
+                elif self._is_direct_struct(node):
+                    struct_def = self._parse_direct_struct(node)
+                    if struct_def:
+                        struct_defs.append(struct_def)
+                        self.logger.debug(f"構造体定義を抽出: {struct_def.name}")
+        
+        except Exception as e:
+            self.logger.error(f"構造体定義の抽出中にエラー: {e}")
+        
+        self.logger.info(f"{len(struct_defs)}個の構造体定義を抽出しました")
+        return struct_defs
+    
+    def _walk_ast(self, node, depth=0):
+        """ASTを再帰的に走査"""
+        if depth > 100:  # 無限ループ防止
+            return
+        
+        yield node
+        
+        # 子ノードを走査
+        for child_name, child in node.children():
+            if child:
+                yield from self._walk_ast(child, depth + 1)
+    
+    def _is_typedef_struct(self, node) -> bool:
+        """Typedefされた構造体かどうかを判定"""
+        try:
+            # pycparser.c_ast.Typedef
+            if node.__class__.__name__ == 'Typedef':
+                # type が Struct かどうか
+                if hasattr(node, 'type'):
+                    type_node = node.type
+                    # 直接 Struct の場合
+                    if type_node.__class__.__name__ == 'Struct':
+                        return True
+                    # TypeDecl -> Struct の場合
+                    if type_node.__class__.__name__ == 'TypeDecl':
+                        if hasattr(type_node, 'type') and type_node.type.__class__.__name__ == 'Struct':
+                            return True
+        except:
+            pass
+        return False
+    
+    def _is_direct_struct(self, node) -> bool:
+        """直接の構造体定義かどうかを判定"""
+        try:
+            # pycparser.c_ast.Decl -> Struct
+            if node.__class__.__name__ == 'Decl':
+                if hasattr(node, 'type') and node.type.__class__.__name__ == 'Struct':
+                    return True
+        except:
+            pass
+        return False
+    
+    def _parse_typedef_struct(self, node) -> Optional[StructDefinition]:
+        """
+        Typedefされた構造体を解析
+        
+        Args:
+            node: ASTノード (Typedef)
+        
+        Returns:
+            StructDefinition
+        """
+        try:
+            # typedef名を取得
+            typedef_name = node.name
+            
+            # 構造体本体を取得
+            type_node = node.type
+            struct_node = None
+            
+            # TypeDecl -> Struct パターン
+            if type_node.__class__.__name__ == 'TypeDecl':
+                if hasattr(type_node, 'type') and type_node.type.__class__.__name__ == 'Struct':
+                    struct_node = type_node.type
+            # 直接 Struct パターン
+            elif type_node.__class__.__name__ == 'Struct':
+                struct_node = type_node
+            
+            if not struct_node:
+                return None
+            
+            # 元の構造体名を取得（あれば）
+            original_name = None
+            if hasattr(struct_node, 'name') and struct_node.name:
+                original_name = struct_node.name
+            
+            # メンバーを抽出
+            members = self._extract_struct_members(struct_node)
+            
+            return StructDefinition(
+                name=typedef_name,
+                members=members,
+                is_typedef=True,
+                original_name=original_name
+            )
+        
+        except Exception as e:
+            self.logger.error(f"構造体解析エラー: {e}")
+            return None
+    
+    def _parse_direct_struct(self, node) -> Optional[StructDefinition]:
+        """
+        直接の構造体定義を解析
+        
+        Args:
+            node: ASTノード (Decl)
+        
+        Returns:
+            StructDefinition
+        """
+        try:
+            struct_node = node.type
+            
+            # 構造体名を取得
+            struct_name = struct_node.name if hasattr(struct_node, 'name') else None
+            if not struct_name:
+                return None
+            
+            # メンバーを抽出
+            members = self._extract_struct_members(struct_node)
+            
+            return StructDefinition(
+                name=struct_name,
+                members=members,
+                is_typedef=False,
+                original_name=None
+            )
+        
+        except Exception as e:
+            self.logger.error(f"構造体解析エラー: {e}")
+            return None
+    
+    def _extract_struct_members(self, struct_node) -> List[StructMember]:
+        """
+        構造体のメンバーを抽出
+        
+        Args:
+            struct_node: Structノード
+        
+        Returns:
+            StructMemberのリスト
+        """
+        members = []
+        
+        try:
+            # decls属性がある場合（メンバー定義がある）
+            if hasattr(struct_node, 'decls') and struct_node.decls:
+                for decl in struct_node.decls:
+                    member = self._parse_member_decl(decl)
+                    if member:
+                        members.append(member)
+        
+        except Exception as e:
+            self.logger.error(f"メンバー抽出エラー: {e}")
+        
+        return members
+    
+    def _parse_member_decl(self, decl) -> Optional[StructMember]:
+        """
+        メンバー宣言を解析
+        
+        Args:
+            decl: Declノード
+        
+        Returns:
+            StructMember
+        """
+        try:
+            # メンバー名を取得
+            member_name = decl.name if hasattr(decl, 'name') else None
+            if not member_name:
+                return None
+            
+            # 型情報を抽出
+            type_info = self._extract_type_info(decl.type)
+            
+            # ビットフィールドかどうかチェック
+            bit_width = None
+            if hasattr(decl, 'bitsize') and decl.bitsize:
+                # ビットサイズが定数の場合
+                if hasattr(decl.bitsize, 'value'):
+                    bit_width = int(decl.bitsize.value)
+            
+            return StructMember(
+                name=member_name,
+                type=type_info['type_name'],
+                bit_width=bit_width,
+                is_pointer=type_info['is_pointer'],
+                is_array=type_info['is_array'],
+                array_size=type_info['array_size'],
+                nested_struct=type_info.get('nested_struct')
+            )
+        
+        except Exception as e:
+            self.logger.error(f"メンバー宣言解析エラー: {e}")
+            return None
+    
+    def _extract_type_info(self, type_node) -> Dict[str, Any]:
+        """
+        型情報を抽出
+        
+        Args:
+            type_node: 型を表すASTノード
+        
+        Returns:
+            型情報の辞書
+        """
+        info = {
+            'type_name': 'unknown',
+            'is_pointer': False,
+            'is_array': False,
+            'array_size': None,
+            'nested_struct': None
+        }
+        
+        try:
+            current_node = type_node
+            
+            # ポインタの検出
+            while current_node and current_node.__class__.__name__ == 'PtrDecl':
+                info['is_pointer'] = True
+                current_node = current_node.type if hasattr(current_node, 'type') else None
+            
+            # 配列の検出
+            if current_node and current_node.__class__.__name__ == 'ArrayDecl':
+                info['is_array'] = True
+                # 配列サイズを取得
+                if hasattr(current_node, 'dim') and current_node.dim:
+                    if hasattr(current_node.dim, 'value'):
+                        info['array_size'] = int(current_node.dim.value)
+                current_node = current_node.type if hasattr(current_node, 'type') else None
+            
+            # TypeDeclまで到達
+            if current_node and current_node.__class__.__name__ == 'TypeDecl':
+                if hasattr(current_node, 'type'):
+                    # 基本型の場合
+                    if current_node.type.__class__.__name__ == 'IdentifierType':
+                        if hasattr(current_node.type, 'names'):
+                            info['type_name'] = ' '.join(current_node.type.names)
+                    # 構造体の場合
+                    elif current_node.type.__class__.__name__ == 'Struct':
+                        struct_name = current_node.type.name if hasattr(current_node.type, 'name') else 'struct'
+                        info['type_name'] = f'struct {struct_name}'
+                        # ネストした構造体の定義を再帰的に解析
+                        if hasattr(current_node.type, 'decls') and current_node.type.decls:
+                            nested_members = self._extract_struct_members(current_node.type)
+                            info['nested_struct'] = StructDefinition(
+                                name=struct_name,
+                                members=nested_members,
+                                is_typedef=False
+                            )
+        
+        except Exception as e:
+            self.logger.error(f"型情報抽出エラー: {e}")
+        
+        return info

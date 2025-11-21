@@ -674,7 +674,7 @@ class TestFunctionGenerator:
     
     def _generate_assertions(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """
-        アサーションコードを生成
+        アサーションコードを生成 (v2.8.0で拡張)
         
         Args:
             test_case: テストケース
@@ -693,8 +693,13 @@ class TestFunctionGenerator:
             
             # 構造体型かチェック
             if self._is_struct_type(return_type):
-                # 構造体の場合はTODOコメントで案内
-                lines.append("    // 例: TEST_ASSERT_EQUAL(expected_value, result.member_name);")
+                # v2.8.0: 構造体メンバーごとのアサーション生成
+                struct_assertions = self._generate_struct_assertions(return_type, "result", parsed_data)
+                if struct_assertions:
+                    lines.extend(struct_assertions)
+                else:
+                    # 構造体定義が見つからない場合は従来のTODOコメント
+                    lines.append("    // 例: TEST_ASSERT_EQUAL(expected_value, result.member_name);")
             else:
                 # 基本型の場合
                 expected_value = self._calculate_expected_return_value(test_case, parsed_data)
@@ -902,6 +907,51 @@ class TestFunctionGenerator:
             return f"// ERROR: {var_name}はenum定数のため変数として初期化できません"
         
         return init_code
+    
+    def _generate_struct_assertions(self, type_name: str, var_name: str, 
+                                   parsed_data: ParsedData) -> List[str]:
+        """
+        構造体メンバーごとのアサーションを生成 (v2.8.0で追加)
+        
+        Args:
+            type_name: 構造体の型名
+            var_name: 変数名（例: "result"）
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            アサーションコードのリスト
+        """
+        lines = []
+        
+        # 構造体定義を検索
+        struct_def = parsed_data.get_struct_definition(type_name)
+        if not struct_def:
+            return lines
+        
+        # すべてのメンバーをフラットに取得（ネスト対応）
+        members = struct_def.get_all_members_flat()
+        
+        for access_path, member in members:
+            full_path = f"{var_name}.{access_path}"
+            
+            # ポインタメンバーの場合
+            if member.is_pointer:
+                lines.append(f"    // TODO: ポインタメンバー {full_path} を確認してください")
+                continue
+            
+            # 配列メンバーの場合
+            if member.is_array:
+                lines.append(f"    // TODO: 配列メンバー {full_path} を確認してください")
+                continue
+            
+            # ビットフィールドの場合
+            if member.bit_width:
+                lines.append(f"    TEST_ASSERT_EQUAL(0, {full_path});  // ビットフィールド")
+            else:
+                # 通常のメンバー
+                lines.append(f"    TEST_ASSERT_EQUAL(0, {full_path});")
+        
+        return lines
 
 
 if __name__ == "__main__":

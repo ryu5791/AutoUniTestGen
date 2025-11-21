@@ -164,6 +164,10 @@ class CCodeParser:
             macros, macro_definitions = source_extractor.extract_macro_definitions(code)
             self.logger.info(f"{len(macro_definitions)}個のマクロ定義を抽出しました")
             
+            
+            # 11.6. v2.8.0: 構造体定義を抽出
+            struct_definitions = self.typedef_extractor.extract_struct_definitions(ast)
+            self.logger.info(f"{len(struct_definitions)}個の構造体定義を抽出しました")
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -178,7 +182,8 @@ class CCodeParser:
                 typedefs=typedefs,  # v2.2: 追加
                 variables=variables,  # v2.2: 追加
                 macros=macros,  # v2.4.2: 追加
-                macro_definitions=macro_definitions  # v2.4.2: 追加
+                macro_definitions=macro_definitions,  # v2.4.2: 追加
+                struct_definitions=struct_definitions  # v2.8.0: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")

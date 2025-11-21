@@ -209,6 +209,91 @@ class VariableDeclInfo:
 
 
 @dataclass
+class StructMember:
+    """構造体メンバー情報 (v2.8.0で追加)"""
+    name: str                              # メンバー名（例: "status"）
+    type: str                              # 型名（例: "uint8_t"）
+    bit_width: Optional[int] = None        # ビット幅（ビットフィールドの場合）
+    is_pointer: bool = False               # ポインタかどうか
+    is_array: bool = False                 # 配列かどうか
+    array_size: Optional[int] = None       # 配列サイズ
+    nested_struct: Optional['StructDefinition'] = None  # ネストした構造体
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """辞書形式に変換"""
+        result = {
+            'name': self.name,
+            'type': self.type,
+            'bit_width': self.bit_width,
+            'is_pointer': self.is_pointer,
+            'is_array': self.is_array,
+            'array_size': self.array_size
+        }
+        if self.nested_struct:
+            result['nested_struct'] = self.nested_struct.to_dict()
+        return result
+    
+    def get_full_type(self) -> str:
+        """完全な型名を取得（ポインタや配列を含む）"""
+        type_str = self.type
+        if self.is_pointer:
+            type_str += '*'
+        if self.is_array and self.array_size:
+            type_str += f'[{self.array_size}]'
+        return type_str
+
+
+@dataclass
+class StructDefinition:
+    """構造体定義情報 (v2.8.0で追加)"""
+    name: str                              # 構造体名（例: "state_def_t"）
+    members: List[StructMember] = field(default_factory=list)
+    is_typedef: bool = True                # typedefされているか
+    original_name: Optional[str] = None    # 元の構造体名（typedef前）
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """辞書形式に変換"""
+        return {
+            'name': self.name,
+            'members': [m.to_dict() for m in self.members],
+            'is_typedef': self.is_typedef,
+            'original_name': self.original_name
+        }
+    
+    def get_member(self, member_name: str) -> Optional[StructMember]:
+        """メンバーを名前で検索"""
+        for member in self.members:
+            if member.name == member_name:
+                return member
+        return None
+    
+    def get_all_members_flat(self, prefix: str = "") -> List[tuple]:
+        """
+        すべてのメンバーをフラットなリストで取得（ネスト対応）
+        
+        Args:
+            prefix: メンバー名のプレフィックス
+        
+        Returns:
+            [(アクセスパス, StructMember), ...] のリスト
+            例: [("status", member1), ("position.x", member2)]
+        """
+        result = []
+        for member in self.members:
+            access_path = f"{prefix}.{member.name}" if prefix else member.name
+            
+            if member.nested_struct:
+                # ネストした構造体の場合、再帰的に展開
+                nested_members = member.nested_struct.get_all_members_flat(access_path)
+                result.extend(nested_members)
+            else:
+                # 通常のメンバー
+                result.append((access_path, member))
+        
+        return result
+
+
+@dataclass
 class ParsedData:
     """C言語解析結果データ"""
     file_name: str
@@ -224,6 +309,30 @@ class ParsedData:
     variables: List['VariableDeclInfo'] = field(default_factory=list)  # v2.2: 変数宣言情報
     macros: Dict[str, str] = field(default_factory=dict)  # v2.4.2: マクロ定義 {名前: 値}
     macro_definitions: List[str] = field(default_factory=list)  # v2.4.2: マクロ定義文字列のリスト
+    struct_definitions: List[StructDefinition] = field(default_factory=list)  # v2.8.0: 構造体定義
+    
+    def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
+        """
+        型名から構造体定義を取得
+        
+        Args:
+            type_name: 構造体の型名
+        
+        Returns:
+            StructDefinition または None
+        """
+        # 型名をクリーンアップ（ポインタ記号などを除去）
+        clean_name = type_name.replace('*', '').replace('const', '').strip()
+        
+        # 構造体定義を検索
+        for struct_def in self.struct_definitions:
+            if struct_def.name == clean_name:
+                return struct_def
+            # original_nameでも検索
+            if struct_def.original_name == clean_name:
+                return struct_def
+        
+        return None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -237,7 +346,8 @@ class ParsedData:
             'typedefs': [td.to_dict() for td in self.typedefs],
             'variables': [v.to_dict() for v in self.variables],
             'macros': self.macros,
-            'macro_definitions': self.macro_definitions
+            'macro_definitions': self.macro_definitions,
+            'struct_definitions': [s.to_dict() for s in self.struct_definitions]
         }
 
 
