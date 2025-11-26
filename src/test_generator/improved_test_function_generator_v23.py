@@ -178,7 +178,7 @@ class ImprovedTestFunctionGeneratorV23:
                         f"    // 推論値: {expected.value} (手動確認推奨)"
                     )
                     assertions.append(
-                        f"    TEST_ASSERT_EQUAL(/* TODO: 確認 */ {expected.value}, result);"
+                        f"    // TEST_ASSERT_EQUAL({expected.value}, result);  // TODO: 確認後コメント解除"
                     )
             else:
                 # 推論失敗または信頼度が低い
@@ -213,7 +213,7 @@ class ImprovedTestFunctionGeneratorV23:
         # 戻り値の検証
         if parsed_data.return_type and parsed_data.return_type != "void":
             assertions.append("    // TODO: 期待値を設定してください")
-            assertions.append("    TEST_ASSERT_EQUAL(/* expected_value */, result);")
+            assertions.append("    // TEST_ASSERT_EQUAL(expected_value, result);  // 期待値設定後コメント解除")
         
         # グローバル変数の検証
         if parsed_data.global_variables:

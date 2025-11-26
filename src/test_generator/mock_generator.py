@@ -207,7 +207,7 @@ class MockGenerator:
         lines.append("    // 呼び出し回数の確認")
         
         for mock_func in self.mock_functions:
-            lines.append(f"    TEST_ASSERT_EQUAL(/* 期待回数 */, {mock_func.call_count_variable});")
+            lines.append(f"    // TEST_ASSERT_EQUAL(expected_count, {mock_func.call_count_variable});  // TODO: 期待回数を設定後コメント解除")
         
         return '\n'.join(lines)
 

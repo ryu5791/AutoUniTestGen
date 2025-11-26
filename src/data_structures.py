@@ -73,6 +73,54 @@ class TruthTableData:
             'test_cases': [tc.to_dict() for tc in self.test_cases],
             'total_tests': self.total_tests
         }
+    
+    def to_excel_format(self) -> List[List[Any]]:
+        """
+        Excel出力用のフォーマットに変換
+        
+        Returns:
+            2次元リスト（ヘッダー行 + データ行）
+        """
+        if not self.test_cases:
+            return []
+        
+        # 条件名のリストを収集（すべてのテストケースから）
+        condition_names = []
+        for tc in self.test_cases:
+            if hasattr(tc, 'condition_values') and tc.condition_values:
+                for cond_name in tc.condition_values.keys():
+                    if cond_name not in condition_names:
+                        condition_names.append(cond_name)
+        
+        # ヘッダー行
+        header = ['No', 'テスト名'] + condition_names + ['条件式']
+        
+        # データ行
+        rows = [header]
+        for idx, tc in enumerate(self.test_cases, 1):
+            row = [idx, tc.test_name]
+            
+            # 条件値
+            for cond_name in condition_names:
+                if hasattr(tc, 'condition_values') and tc.condition_values:
+                    val = tc.condition_values.get(cond_name, '-')
+                    row.append('T' if val else 'F')
+                else:
+                    row.append('-')
+            
+            # 条件式
+            if hasattr(tc, 'condition') and tc.condition:
+                if hasattr(tc.condition, 'expression'):
+                    condition_str = tc.condition.expression
+                else:
+                    condition_str = str(tc.condition)
+            else:
+                condition_str = ''
+            row.append(condition_str)
+            
+            rows.append(row)
+        
+        return rows
 
 
 @dataclass

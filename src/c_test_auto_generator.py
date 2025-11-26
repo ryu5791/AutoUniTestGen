@@ -215,7 +215,7 @@ class CTestAutoGenerator:
                     truth_table, parsed_data, source_code
                 )
                 # スタンドアロン版をファイルに保存
-                with open(str(test_code_path), 'w', encoding='shift_jis') as f:
+                with open(str(test_code_path), 'w', encoding='utf-8') as f:
                     f.write(standalone_code)
                 result.test_code_path = test_code_path
                 print(f"   ✓ スタンドアロン版テストコード生成完了")
