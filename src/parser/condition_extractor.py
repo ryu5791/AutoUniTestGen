@@ -32,6 +32,30 @@ class ConditionExtractor(c_ast.NodeVisitor):
         self.current_function = None
         self.in_target_function = False
         self.parent_context = ""
+        self.source_lines: List[str] = []  # v3.1: 元のソースコードの行を保持
+        self.line_offset: int = 0  # v3.1: 行番号オフセット
+    
+    def set_source_lines(self, source_lines: List[str]) -> None:
+        """
+        元のソースコードの行を設定
+        
+        Args:
+            source_lines: ソースコードの行リスト
+        """
+        self.source_lines = source_lines
+        self.logger.debug(f"ソースコード {len(source_lines)} 行を設定しました")
+    
+    def set_line_offset(self, offset: int) -> None:
+        """
+        行番号オフセットを設定
+        
+        v3.1: ASTの行番号から元のソース行番号に変換するためのオフセット
+        
+        Args:
+            offset: 行番号オフセット（プリペンドされた行数）
+        """
+        self.line_offset = offset
+        self.logger.debug(f"行番号オフセット: {offset}")
     
     def extract_conditions(self, ast: c_ast.FileAST) -> List[Condition]:
         """
@@ -72,17 +96,27 @@ class ConditionExtractor(c_ast.NodeVisitor):
         
         # 行番号を取得
         line = getattr(node, 'coord', None)
-        line_no = line.line if line else 0
+        ast_line_no = line.line if line else 0
         
-        # 条件式を文字列化（トップレベルなので括弧なし）
-        condition_str = self._node_to_str(node.cond, is_top_level=True)
+        # v3.1: オフセットを適用して元のソース行番号を取得
+        original_line_no = ast_line_no - self.line_offset
+        
+        # v3.1: 元のソースコードから条件式を抽出（括弧構造を維持）
+        condition_str = self._extract_condition_from_source(original_line_no)
+        
+        # フォールバック: 抽出失敗時はASTから再構築
+        if not condition_str:
+            condition_str = self._node_to_str(node.cond, is_top_level=True)
+            self.logger.debug(f"フォールバック: ASTから条件式を再構築 (AST行{ast_line_no}→元行{original_line_no})")
+        else:
+            self.logger.debug(f"ソースから条件式を抽出 (元行{original_line_no}): {condition_str[:50]}...")
         
         # 条件式を解析
         condition_info = self._analyze_binary_op(node.cond)
         
         # Conditionオブジェクトを作成
         condition = Condition(
-            line=line_no,
+            line=original_line_no,  # v3.1: 元のソースの行番号を使用
             type=condition_info['type'],
             expression=condition_str,
             operator=condition_info.get('operator'),
@@ -94,7 +128,7 @@ class ConditionExtractor(c_ast.NodeVisitor):
         )
         
         self.conditions.append(condition)
-        self.logger.debug(f"if文を検出 (行{line_no}): {condition_str}")
+        self.logger.debug(f"if文を検出 (元行{original_line_no}): {condition_str}")
         
         # 子ノードを訪問
         self.generic_visit(node)
@@ -233,6 +267,103 @@ class ConditionExtractor(c_ast.NodeVisitor):
             visit_cases(switch_node.stmt)
         
         return cases
+    
+    def _extract_condition_from_source(self, start_line: int) -> str:
+        """
+        元のソースコードからif文の条件式を抽出
+        
+        v3.1: 元のソースの括弧構造を維持するため、ASTから再構築せず直接抽出
+        
+        Args:
+            start_line: if文の開始行番号（1から始まる）
+        
+        Returns:
+            条件式テキスト（抽出失敗時は空文字列）
+        """
+        if not self.source_lines or start_line < 1:
+            return ""
+        
+        # ソースの行番号は1から始まるが、リストは0から始まる
+        line_idx = start_line - 1
+        if line_idx >= len(self.source_lines):
+            return ""
+        
+        text = ""
+        paren_depth = 0
+        started = False
+        found_if = False
+        
+        # 開始行から探索
+        for i in range(line_idx, len(self.source_lines)):
+            line = self.source_lines[i]
+            j = 0
+            
+            while j < len(line):
+                # 'if'キーワードを探す（まだ見つかっていない場合）
+                if not found_if:
+                    # 'if' の後に '(' が続くパターンを探す
+                    if line[j:j+2] == 'if' and (j == 0 or not line[j-1].isalnum()):
+                        # 'if'の後に識別子文字が続かないことを確認
+                        after_if = j + 2
+                        if after_if >= len(line) or not line[after_if].isalnum():
+                            found_if = True
+                            j += 2
+                            continue
+                    j += 1
+                    continue
+                
+                char = line[j]
+                
+                # コメントをスキップ
+                if line[j:j+2] == '//':
+                    break  # 行末まで無視
+                if line[j:j+2] == '/*':
+                    # ブロックコメントの終わりを探す
+                    end_idx = line.find('*/', j + 2)
+                    if end_idx != -1:
+                        j = end_idx + 2
+                        continue
+                    else:
+                        # この行の残りをスキップ
+                        break
+                
+                if not started:
+                    if char == '(':
+                        started = True
+                        paren_depth = 1
+                        j += 1
+                        continue
+                    elif char.isspace():
+                        j += 1
+                        continue
+                    else:
+                        # 'if'の後に'('以外の非空白文字が来た
+                        j += 1
+                        continue
+                else:
+                    if char == '(':
+                        paren_depth += 1
+                        text += char
+                    elif char == ')':
+                        paren_depth -= 1
+                        if paren_depth == 0:
+                            # 条件式の終了
+                            # 改行と余分な空白を正規化
+                            result = ' '.join(text.split())
+                            # v3.1: 条件式全体を括弧で囲んで返す（元の構造を維持）
+                            return f"({result})"
+                        text += char
+                    else:
+                        text += char
+                
+                j += 1
+            
+            # 次の行に続く場合はスペースを追加
+            if started and paren_depth > 0:
+                text += " "
+        
+        # 括弧が閉じられなかった場合
+        return ""
     
     def _node_to_str(self, node, is_top_level: bool = False) -> str:
         """

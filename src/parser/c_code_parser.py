@@ -121,6 +121,10 @@ class CCodeParser:
             extractor = ConditionExtractor(
                 target_function=target_function or (function_info.name if function_info else None)
             )
+            # v3.1: 元のソースコードの行を設定（括弧構造維持のため）
+            extractor.set_source_lines(code.split('\n'))
+            # v3.1: 行番号オフセットを設定
+            extractor.set_line_offset(self.ast_builder.get_line_offset())
             conditions = extractor.extract_conditions(ast)
             
             # 6. 外部関数を抽出

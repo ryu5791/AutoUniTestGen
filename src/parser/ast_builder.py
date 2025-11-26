@@ -21,6 +21,16 @@ class ASTBuilder:
         """初期化"""
         self.logger = setup_logger(__name__)
         self.parser = c_parser.CParser()
+        self.line_offset = 0  # v3.1: プリペンドされた行数のオフセット
+    
+    def get_line_offset(self) -> int:
+        """
+        プリペンドされた行数のオフセットを取得
+        
+        Returns:
+            行番号オフセット
+        """
+        return self.line_offset
     
     def build_ast(self, code: str, use_cpp: bool = False) -> Optional[c_ast.FileAST]:
         """
@@ -121,6 +131,9 @@ class ASTBuilder:
             standard_definitions += self._get_embedded_macro_definitions() + "\n\n"
         
         # コードの先頭に標準定義を追加
+        # v3.1: プリペンドされる行数をオフセットとして保存
+        self.line_offset = len(standard_definitions.split('\n')) - 1
+        self.logger.debug(f"行番号オフセット: {self.line_offset}")
         return standard_definitions + code
     
     def _get_embedded_type_definitions(self) -> str:
