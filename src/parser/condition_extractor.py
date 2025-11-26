@@ -74,8 +74,8 @@ class ConditionExtractor(c_ast.NodeVisitor):
         line = getattr(node, 'coord', None)
         line_no = line.line if line else 0
         
-        # 条件式を文字列化
-        condition_str = self._node_to_str(node.cond)
+        # 条件式を文字列化（トップレベルなので括弧なし）
+        condition_str = self._node_to_str(node.cond, is_top_level=True)
         
         # 条件式を解析
         condition_info = self._analyze_binary_op(node.cond)
@@ -234,12 +234,13 @@ class ConditionExtractor(c_ast.NodeVisitor):
         
         return cases
     
-    def _node_to_str(self, node) -> str:
+    def _node_to_str(self, node, is_top_level: bool = False) -> str:
         """
         ASTノードを文字列に変換
         
         Args:
             node: ASTノード
+            is_top_level: トップレベル（最外側）かどうか
         
         Returns:
             文字列表現
@@ -259,7 +260,18 @@ class ConditionExtractor(c_ast.NodeVisitor):
         if isinstance(node, c_ast.BinaryOp):
             left = self._node_to_str(node.left)
             right = self._node_to_str(node.right)
-            return f"({left} {node.op} {right})"
+            # トップレベルの論理演算子の場合は括弧なし
+            # 比較演算子やその他の演算子は括弧あり
+            op = node.op
+            if op in ('||', '&&'):
+                # 論理演算子：トップレベルなら括弧なし
+                if is_top_level:
+                    return f"{left} {op} {right}"
+                else:
+                    return f"({left} {op} {right})"
+            else:
+                # 比較演算子等：常に括弧あり（元のソースに合わせる）
+                return f"({left} {op} {right})"
         
         # 単項演算子
         if isinstance(node, c_ast.UnaryOp):

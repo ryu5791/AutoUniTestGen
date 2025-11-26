@@ -7,7 +7,6 @@ C言語単体テスト自動生成ツールで使用するデータクラスを�
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
-from .encoding_config import get_output_encoding
 
 
 class ConditionType(Enum):
@@ -105,18 +104,8 @@ class TestCode:
         ]
         return '\n\n'.join(p for p in parts if p)
     
-    def save(self, filepath: str, encoding: str = None) -> None:
-        """
-        ファイルに保存
-        
-        Args:
-            filepath: 保存先ファイルパス
-            encoding: 出力エンコーディング（Noneの場合は設定値を使用）
-        """
-        if encoding is None:
-            encoding = get_output_encoding()
-        
-        with open(filepath, 'w', encoding=encoding, errors='ignore') as f:
+    def save(self, filepath: str) -> None:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(self.to_string())
 
 

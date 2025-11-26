@@ -81,39 +81,27 @@ class ConditionAnalyzer:
         conditions = condition.conditions if condition.conditions else [condition.left, condition.right]
         n_conditions = len(conditions)
         
-        from src.truth_table.mcdc_pattern_generator import MCDCPatternGenerator
-        mcdc_gen = MCDCPatternGenerator()
+        from src.truth_table.mcdc_pattern_generator import MCDCPatternGeneratorV3
+        mcdc_gen = MCDCPatternGeneratorV3()
         
         # ネスト構造をチェック
         has_nested = any('||' in cond or '&&' in cond for cond in conditions)
         
-        if has_nested:
-            # ネスト構造がある場合は新しいメソッドを使用
+        # 条件式を結合してパターンを生成
+        if has_nested or n_conditions > 2:
             self.logger.info(f"ネストしたOR条件を検出: {len(conditions)}個の条件")
-            patterns = mcdc_gen.generate_mcdc_patterns_for_complex('or', conditions)
+            # 条件式全体を渡してパース
+            combined = ' || '.join(f'({c})' for c in conditions)
+            patterns, leaf_texts = mcdc_gen.generate_mcdc_patterns(combined)
         else:
             # シンプルなOR条件
             patterns = mcdc_gen.generate_or_patterns(n_conditions)
+            leaf_texts = conditions
         
         # MC/DC説明を生成
         mcdc_explanation = {}
-        if not has_nested:
-            if n_conditions == 2:
-                mcdc_explanation = {
-                    'TF': '左辺が真、右辺が偽',
-                    'FT': '左辺が偽、右辺が真',
-                    'FF': '両方偽'
-                }
-            elif n_conditions >= 3:
-                for i, pattern in enumerate(patterns[:-1]):  # 最後のFFF以外
-                    if 'T' in pattern:
-                        true_index = pattern.index('T')
-                        mcdc_explanation[pattern] = f'条件{true_index + 1}が真、他が偽'
-                mcdc_explanation[patterns[-1]] = '全て偽'
-        else:
-            # ネスト構造の場合は詳細な説明を生成
-            for i, pattern in enumerate(patterns, 1):
-                mcdc_explanation[pattern] = f'パターン{i}'
+        for i, pattern in enumerate(patterns, 1):
+            mcdc_explanation[pattern] = f'パターン{i}'
         
         return {
             'type': 'or',
@@ -123,6 +111,7 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
+            'leaf_texts': leaf_texts if has_nested or n_conditions > 2 else None,
             'description': f'OR条件（||）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
             'mcdc_explanation': mcdc_explanation,
             'has_nested': has_nested
@@ -142,40 +131,27 @@ class ConditionAnalyzer:
         conditions = condition.conditions if condition.conditions else [condition.left, condition.right]
         n_conditions = len(conditions)
         
-        from src.truth_table.mcdc_pattern_generator import MCDCPatternGenerator
-        mcdc_gen = MCDCPatternGenerator()
+        from src.truth_table.mcdc_pattern_generator import MCDCPatternGeneratorV3
+        mcdc_gen = MCDCPatternGeneratorV3()
         
         # ネスト構造をチェック
         has_nested = any('||' in cond or '&&' in cond for cond in conditions)
         
-        if has_nested:
-            # ネスト構造がある場合は新しいメソッドを使用
+        # 条件式を結合してパターンを生成
+        if has_nested or n_conditions > 2:
             self.logger.info(f"ネストしたAND条件を検出: {len(conditions)}個の条件")
-            patterns = mcdc_gen.generate_mcdc_patterns_for_complex('and', conditions)
+            # 条件式全体を渡してパース
+            combined = ' && '.join(f'({c})' for c in conditions)
+            patterns, leaf_texts = mcdc_gen.generate_mcdc_patterns(combined)
         else:
             # シンプルなAND条件
             patterns = mcdc_gen.generate_and_patterns(n_conditions)
+            leaf_texts = conditions
         
         # MC/DC説明を生成
         mcdc_explanation = {}
-        if not has_nested:
-            if n_conditions == 2:
-                mcdc_explanation = {
-                    'TF': '左辺が真、右辺が偽',
-                    'FT': '左辺が偽、右辺が真',
-                    'TT': '両方真'
-                }
-            elif n_conditions >= 3:
-                for i, pattern in enumerate(patterns[:-1]):  # 最後のTTT以外
-                    if 'F' in pattern:
-                        false_index = pattern.index('F')
-                        mcdc_explanation[pattern] = f'条件{false_index + 1}が偽、他が真'
-                if patterns:
-                    mcdc_explanation[patterns[-1]] = '全て真'
-        else:
-            # ネスト構造の場合は詳細な説明を生成
-            for i, pattern in enumerate(patterns, 1):
-                mcdc_explanation[pattern] = f'パターン{i}'
+        for i, pattern in enumerate(patterns, 1):
+            mcdc_explanation[pattern] = f'パターン{i}'
         
         return {
             'type': 'and',
@@ -185,6 +161,7 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
+            'leaf_texts': leaf_texts if has_nested or n_conditions > 2 else None,
             'description': f'AND条件（&&）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
             'mcdc_explanation': mcdc_explanation,
             'has_nested': has_nested
