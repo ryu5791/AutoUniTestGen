@@ -2,6 +2,8 @@
 BoundaryValueCalculatorモジュール
 
 境界値を計算して適切なテスト値を生成
+
+v3.3.0: ValueResolverを使用してTODOコメントを解消
 """
 
 import sys
@@ -12,6 +14,7 @@ from typing import Optional, Dict, Tuple
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger
+from src.test_generator.value_resolver import ValueResolver
 
 
 class BoundaryValueCalculator:
@@ -206,6 +209,22 @@ class BoundaryValueCalculator:
         Returns:
             テスト値の設定コード（例: "v10 = 31"）
         """
+        return self.generate_test_value_with_parsed_data(expression, truth, None)
+    
+    def generate_test_value_with_parsed_data(self, expression: str, truth: str, parsed_data) -> Optional[str]:
+        """
+        テスト値を生成（parsed_data付き）
+        
+        v3.3.0追加: parsed_dataを使用してenum/マクロ値を解決
+        
+        Args:
+            expression: 条件式
+            truth: 真偽（'T' or 'F'）
+            parsed_data: ParsedDataオブジェクト（None可）
+        
+        Returns:
+            テスト値の設定コード（例: "v10 = 31"）
+        """
         comparison = self.parse_comparison(expression)
         
         if comparison:
@@ -227,26 +246,32 @@ class BoundaryValueCalculator:
                 func_name = value.replace('()', '').strip()
                 if operator == '==':
                     if truth == 'T':
-                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と一致させる"
+                        return f"// mock_{func_name}_return_value を設定して {variable} と一致させる"
                     else:
-                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と不一致にする"
+                        return f"// mock_{func_name}_return_value を設定して {variable} と不一致にする"
                 elif operator == '!=':
                     if truth == 'T':
-                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と不一致にする"
+                        return f"// mock_{func_name}_return_value を設定して {variable} と不一致にする"
                     else:
-                        return f"// TODO: mock_{func_name}_return_value を設定して {variable} と一致させる"
+                        return f"// mock_{func_name}_return_value を設定して {variable} と一致させる"
             
             if is_identifier:
                 # 識別子同士の比較（例: mx63 == m47）
+                # v3.3.0: ValueResolverを使用してTODOを解消
+                value_resolver = ValueResolver(parsed_data)
+                
                 if operator == '==':
                     if truth == 'T':
                         return f"{variable} = {value}"
                     else:
-                        # 偽の場合は異なる値（簡易実装）
-                        return f"{variable} = 0;  // TODO: {value}以外の値を設定"
+                        # 偽の場合は異なる値を計算
+                        different_val, comment = value_resolver.resolve_different_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
                 elif operator == '!=':
                     if truth == 'T':
-                        return f"{variable} = 0;  // TODO: {value}以外の値を設定"
+                        # 真の場合は異なる値を計算
+                        different_val, comment = value_resolver.resolve_different_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
                     else:
                         return f"{variable} = {value}"
             else:

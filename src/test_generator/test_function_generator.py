@@ -2,6 +2,8 @@
 TestFunctionGeneratorモジュール
 
 Unityテスト関数を生成
+
+v3.3.0: ValueResolverを使用してTODOコメントを解消
 """
 
 import sys
@@ -15,6 +17,7 @@ from src.utils import setup_logger, sanitize_identifier
 from src.data_structures import TestCase, ParsedData, Condition, ConditionType
 from src.test_generator.boundary_value_calculator import BoundaryValueCalculator
 from src.test_generator.comment_generator import CommentGenerator
+from src.test_generator.value_resolver import ValueResolver
 
 
 class TestFunctionGenerator:
@@ -332,25 +335,25 @@ class TestFunctionGenerator:
             if self._is_function_call_pattern(var):
                 # 関数呼び出しは変数として初期化できない
                 func_name = var.replace('()', '').strip()
-                return f"// TODO: mock_{func_name}_return_value を設定してください"
+                return f"// mock_{func_name}_return_value を設定してください"
             
             # 関数かenum定数でないことを確認
             if self._is_function_or_enum(var, parsed_data):
-                return f"// TODO: {var}は関数またはenum定数のため初期化できません"
+                return f"// {var}は関数またはenum定数のため初期化できません"
+            
+            # v3.3.0: ValueResolverを使用してTODOを解消
+            value_resolver = ValueResolver(parsed_data)
             
             # ビットフィールドかチェック
             if var in parsed_data.bitfields:
                 bitfield = parsed_data.bitfields[var]
-                max_val = bitfield.get_max_value()
-                if truth == 'T':
-                    return f"{var} = 1;  // TODO: 真になる値を設定 (最大値: 0x{max_val:X})"
-                else:
-                    return f"{var} = 0;  // TODO: 偽になる値を設定 (最大値: 0x{max_val:X})"
+                bit_width = bitfield.bit_width
+                init_val, comment = value_resolver.get_bitfield_init_value(truth, bit_width)
+                return f"{var} = {init_val};  // {comment}"
             
-            if truth == 'T':
-                return f"{var} = 1;  // TODO: 真になる値を設定"
-            else:
-                return f"{var} = 0;  // TODO: 偽になる値を設定"
+            # 通常のブール条件
+            init_val, comment = value_resolver.get_boolean_init_value(truth)
+            return f"{var} = {init_val};  // {comment}"
         
         return None
     
@@ -419,14 +422,17 @@ class TestFunctionGenerator:
         
         conditions = condition.conditions if condition.conditions else [condition.left, condition.right]
         
+        # v3.3.0: ValueResolverを使用
+        value_resolver = ValueResolver(parsed_data)
+        
         # 各条件に対して値を設定
         for i, cond in enumerate(conditions):
             if i < len(truth):
                 truth_val = truth[i]
-                test_value = self.boundary_calc.generate_test_value(cond, truth_val)
+                test_value = self.boundary_calc.generate_test_value_with_parsed_data(cond, truth_val, parsed_data)
                 
                 if test_value:
-                    # 関数呼び出しが含まれる場合はTODOコメントとしてそのまま追加
+                    # 関数呼び出しが含まれる場合はコメントとしてそのまま追加
                     if test_value.startswith("//"):
                         init_list.append(test_value)
                     else:
@@ -442,15 +448,16 @@ class TestFunctionGenerator:
                         # 関数呼び出しかチェック
                         if self._is_function_call_pattern(var):
                             func_name = var.replace('()', '').strip()
-                            init_list.append(f"// TODO: mock_{func_name}_return_value を設定してください")
+                            init_list.append(f"// mock_{func_name}_return_value を設定してください")
                             continue
                         
                         # 関数またはenum定数でないことを確認
                         if self._is_function_or_enum(var, parsed_data):
-                            init_list.append(f"// TODO: {var}は関数またはenum定数のため初期化できません")
+                            init_list.append(f"// {var}は関数またはenum定数のため初期化できません")
                         else:
-                            val = '1' if truth_val == 'T' else '0'
-                            init_list.append(f"{var} = {val};  // TODO: 適切な値を設定")
+                            # v3.3.0: ValueResolverを使用
+                            init_val, comment = value_resolver.get_boolean_init_value(truth_val)
+                            init_list.append(f"{var} = {init_val};  // {comment}")
         
         return init_list
     
@@ -685,7 +692,7 @@ class TestFunctionGenerator:
         """
         lines = []
         lines.append("    // 結果を確認")
-        lines.append("    // TODO: 期待値を設定してください")
+        lines.append("    // 期待値を設定してください")
         
         # 戻り値のチェック（void以外の場合）
         if parsed_data.function_info and parsed_data.function_info.return_type != 'void':

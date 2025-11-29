@@ -304,11 +304,23 @@ class CTestAutoGenerator:
             print(f"🔍 C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
             
+            # v3.3.0: ソースコードを読み込んでテスト対象関数の抽出に使用
+            source_code = None
+            try:
+                with open(c_file_path, 'r', encoding='utf-8') as f:
+                    source_code = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(c_file_path, 'r', encoding='shift_jis') as f:
+                        source_code = f.read()
+                except:
+                    pass  # source_codeがNoneの場合、テスト対象関数は含まれない
+            
             print(f"📊 MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
             
             print(f"🧪 Unityテストコードを生成中...")
-            test_code = self.test_generator.generate(truth_table, parsed_data)
+            test_code = self.test_generator.generate(truth_table, parsed_data, source_code)
             test_code.save(output_path)
             
             result.test_code_path = Path(output_path)
@@ -345,11 +357,23 @@ class CTestAutoGenerator:
             print(f"🔍 C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
             
+            # v3.3.0: ソースコードを読み込んでテスト対象関数の抽出に使用
+            source_code = None
+            try:
+                with open(c_file_path, 'r', encoding='utf-8') as f:
+                    source_code = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(c_file_path, 'r', encoding='shift_jis') as f:
+                        source_code = f.read()
+                except:
+                    pass  # source_codeがNoneの場合、テスト対象関数は含まれない
+            
             print(f"📊 MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
             
             print(f"🧪 Unityテストコードを生成中...")
-            test_code = self.test_generator.generate(truth_table, parsed_data)
+            test_code = self.test_generator.generate(truth_table, parsed_data, source_code)
             
             print(f"📝 I/O一覧表を生成中...")
             io_table = self.io_table_generator.generate(test_code, truth_table)
