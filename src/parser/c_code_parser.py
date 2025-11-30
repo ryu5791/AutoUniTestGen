@@ -7,12 +7,12 @@ C言語ソースコードを解析してParseDataを生成
 import sys
 import os
 import re
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger, read_file
-from src.data_structures import ParsedData, FunctionInfo
+from src.data_structures import ParsedData, FunctionInfo, FunctionSignature
 from src.parser.preprocessor import Preprocessor
 from src.parser.ast_builder import ASTBuilder
 from src.parser.condition_extractor import ConditionExtractor
@@ -172,6 +172,11 @@ class CCodeParser:
             # 11.6. v2.8.0: 構造体定義を抽出
             struct_definitions = self.typedef_extractor.extract_struct_definitions(ast)
             self.logger.info(f"{len(struct_definitions)}個の構造体定義を抽出しました")
+            
+            # 11.7. v4.0: 関数シグネチャを抽出
+            function_signatures = self._extract_function_signatures(ast, code)
+            self.logger.info(f"{len(function_signatures)}個の関数シグネチャを抽出しました")
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -187,7 +192,8 @@ class CCodeParser:
                 variables=variables,  # v2.2: 追加
                 macros=macros,  # v2.4.2: 追加
                 macro_definitions=macro_definitions,  # v2.4.2: 追加
-                struct_definitions=struct_definitions  # v2.8.0: 追加
+                struct_definitions=struct_definitions,  # v2.8.0: 追加
+                function_signatures=function_signatures  # v4.0: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
@@ -403,6 +409,140 @@ class CCodeParser:
         visitor.visit(ast)
         
         return visitor.enums, visitor.enum_values
+    
+    def _extract_function_signatures(self, ast, source_code: str) -> Dict[str, FunctionSignature]:
+        """
+        関数宣言からシグネチャを抽出（v4.0）
+        
+        Args:
+            ast: pycparser AST（Noneの場合は正規表現フォールバック）
+            source_code: ソースコード文字列
+        
+        Returns:
+            Dict[関数名, FunctionSignature]
+        """
+        from pycparser import c_ast
+        
+        signatures = {}
+        
+        # AST解析を試みる
+        if ast is not None:
+            class SignatureVisitor(c_ast.NodeVisitor):
+                def __init__(self):
+                    self.sigs = {}
+                
+                def visit_Decl(self, node):
+                    # 関数宣言（プロトタイプ）を処理
+                    if isinstance(node.type, c_ast.FuncDecl):
+                        func_name = node.name
+                        if func_name:
+                            sig = self._extract_from_func_decl(node)
+                            if sig:
+                                self.sigs[func_name] = sig
+                    self.generic_visit(node)
+                
+                def _extract_from_func_decl(self, node) -> Optional[FunctionSignature]:
+                    func_decl = node.type
+                    
+                    # 戻り値型
+                    return_type = self._get_type_str(func_decl.type)
+                    
+                    # パラメータ
+                    parameters = []
+                    if func_decl.args and func_decl.args.params:
+                        for i, param in enumerate(func_decl.args.params):
+                            if hasattr(param, 'name') and hasattr(param, 'type'):
+                                param_type = self._get_type_str(param.type)
+                                param_name = param.name
+                                # void型単独の場合はスキップ（パラメータリスト全体が (void) の場合）
+                                if param_type == 'void' and (param_name is None or param_name == ''):
+                                    continue
+                                # パラメータ名がNoneの場合はデフォルト名を付与
+                                if param_name is None:
+                                    param_name = f"arg{i}"
+                                parameters.append({
+                                    "type": param_type,
+                                    "name": param_name
+                                })
+                    
+                    # static修飾子
+                    is_static = 'static' in (node.storage or [])
+                    
+                    return FunctionSignature(
+                        name=node.name,
+                        return_type=return_type,
+                        parameters=parameters,
+                        is_static=is_static
+                    )
+                
+                def _get_type_str(self, type_node) -> str:
+                    if isinstance(type_node, c_ast.TypeDecl):
+                        return self._get_type_str(type_node.type)
+                    elif isinstance(type_node, c_ast.IdentifierType):
+                        return ' '.join(type_node.names)
+                    elif isinstance(type_node, c_ast.PtrDecl):
+                        return self._get_type_str(type_node.type) + '*'
+                    elif isinstance(type_node, c_ast.ArrayDecl):
+                        return self._get_type_str(type_node.type) + '*'
+                    else:
+                        return 'int'
+            
+            visitor = SignatureVisitor()
+            visitor.visit(ast)
+            signatures = visitor.sigs
+        
+        # 正規表現フォールバック（AST解析できなかった関数用）
+        regex_sigs = self._extract_signatures_regex(source_code)
+        for name, sig in regex_sigs.items():
+            if name not in signatures:
+                signatures[name] = sig
+                self.logger.debug(f"正規表現フォールバックでシグネチャ抽出: {name}")
+        
+        return signatures
+    
+    def _extract_signatures_regex(self, source_code: str) -> Dict[str, FunctionSignature]:
+        """正規表現でプロトタイプ宣言からシグネチャを抽出（フォールバック）"""
+        signatures = {}
+        
+        # プロトタイプ宣言パターン
+        # static? 戻り値型 関数名(パラメータ);
+        pattern = r'^(?:(static)\s+)?(\w+(?:\s*\*)?)\s+(\w+)\s*\(([^)]*)\)\s*;'
+        
+        for match in re.finditer(pattern, source_code, re.MULTILINE):
+            is_static = match.group(1) is not None
+            return_type = match.group(2).strip()
+            func_name = match.group(3).strip()
+            params_str = match.group(4).strip()
+            
+            parameters = []
+            if params_str and params_str.lower() != 'void':
+                for param in params_str.split(','):
+                    param = param.strip()
+                    if not param:
+                        continue
+                    # "uint8_t value" → type="uint8_t", name="value"
+                    # "uint8_t *ptr" → type="uint8_t*", name="ptr"
+                    parts = param.rsplit(' ', 1)
+                    if len(parts) == 2:
+                        ptype = parts[0].strip()
+                        pname = parts[1].strip()
+                        # ポインタ記号の正規化
+                        if pname.startswith('*'):
+                            ptype += '*'
+                            pname = pname[1:]
+                        parameters.append({
+                            "type": ptype,
+                            "name": pname
+                        })
+            
+            signatures[func_name] = FunctionSignature(
+                name=func_name,
+                return_type=return_type,
+                parameters=parameters,
+                is_static=is_static
+            )
+        
+        return signatures
 
 
 if __name__ == "__main__":

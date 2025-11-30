@@ -175,6 +175,35 @@ class FunctionInfo:
 
 
 @dataclass
+class FunctionSignature:
+    """関数シグネチャ情報（v4.0）"""
+    name: str
+    return_type: str = "int"
+    parameters: List[Dict[str, str]] = field(default_factory=list)
+    # parameters例: [{"type": "uint8_t", "name": "Utv1"}, {"type": "int", "name": "count"}]
+    is_static: bool = False
+    
+    def format_parameters(self) -> str:
+        """パラメータ文字列を生成: 'uint8_t Utv1, int Utv2' or 'void'"""
+        if not self.parameters:
+            return "void"
+        return ", ".join(f"{p['type']} {p['name']}" for p in self.parameters)
+    
+    def format_declaration(self) -> str:
+        """完全な関数宣言を生成: 'uint8_t Utf8(void)'"""
+        static_prefix = "static " if self.is_static else ""
+        return f"{static_prefix}{self.return_type} {self.name}({self.format_parameters()})"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'return_type': self.return_type,
+            'parameters': self.parameters,
+            'is_static': self.is_static
+        }
+
+
+@dataclass
 class MockFunction:
     """モック関数の情報"""
     name: str
@@ -358,6 +387,7 @@ class ParsedData:
     macros: Dict[str, str] = field(default_factory=dict)  # v2.4.2: マクロ定義 {名前: 値}
     macro_definitions: List[str] = field(default_factory=list)  # v2.4.2: マクロ定義文字列のリスト
     struct_definitions: List[StructDefinition] = field(default_factory=list)  # v2.8.0: 構造体定義
+    function_signatures: Dict[str, 'FunctionSignature'] = field(default_factory=dict)  # v4.0: 関数シグネチャ
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """
@@ -395,7 +425,8 @@ class ParsedData:
             'variables': [v.to_dict() for v in self.variables],
             'macros': self.macros,
             'macro_definitions': self.macro_definitions,
-            'struct_definitions': [s.to_dict() for s in self.struct_definitions]
+            'struct_definitions': [s.to_dict() for s in self.struct_definitions],
+            'function_signatures': {k: v.to_dict() for k, v in self.function_signatures.items()}  # v4.0
         }
 
 
