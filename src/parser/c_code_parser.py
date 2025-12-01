@@ -127,9 +127,10 @@ class CCodeParser:
             extractor.set_line_offset(self.ast_builder.get_line_offset())
             conditions = extractor.extract_conditions(ast)
             
-            # 6. 外部関数を抽出
+            # 6. 外部関数を抽出（v4.0.1: 標準ライブラリ関数を除外）
             external_functions = self._extract_external_functions(
-                conditions, ast, target_function or (function_info.name if function_info else None)
+                conditions, ast, target_function or (function_info.name if function_info else None),
+                source_code=code  # v4.0.1: ソースコードを渡す
             )
             
             # 7. グローバル変数を抽出
@@ -279,14 +280,18 @@ class CCodeParser:
         
         return visitor.func_info
     
-    def _extract_external_functions(self, conditions, ast, target_function: Optional[str] = None) -> list:
+    def _extract_external_functions(self, conditions, ast, target_function: Optional[str] = None,
+                                      source_code: str = None) -> list:
         """
         外部関数を抽出（条件式と関数本体の両方から）
+        
+        v4.0.1: 標準ライブラリ関数を除外
         
         Args:
             conditions: 条件分岐リスト
             ast: AST
             target_function: 対象関数名
+            source_code: ソースコード（標準ライブラリ関数除外用）
         
         Returns:
             外部関数名のリスト
@@ -329,6 +334,18 @@ class CCodeParser:
         functions = functions - keywords
         if target_function:
             functions.discard(target_function)
+        
+        # v4.0.1: 標準ライブラリ関数を除外
+        if source_code:
+            try:
+                from src.parser.stdlib_function_extractor import StdlibFunctionExtractor
+                stdlib_extractor = StdlibFunctionExtractor()
+                filtered_functions = stdlib_extractor.filter_external_functions(
+                    list(functions), source_code
+                )
+                return sorted(filtered_functions)
+            except Exception as e:
+                self.logger.warning(f"標準ライブラリ関数の除外に失敗: {e}")
         
         return sorted(list(functions))
     
