@@ -8,7 +8,7 @@ C言語単体テスト自動生成ツール - 統合クラス
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 from .parser.c_code_parser import CCodeParser
@@ -16,6 +16,62 @@ from .truth_table.truth_table_generator import TruthTableGenerator
 from .test_generator.unity_test_generator import UnityTestGenerator
 from .io_table.io_table_generator import IOTableGenerator
 from .output.excel_writer import ExcelWriter
+
+
+# ===== エンコーディングユーティリティ関数 =====
+
+def read_source_file(file_path: str) -> Tuple[Optional[str], str]:
+    """
+    ソースファイルを読み込む（エンコーディング自動検出）
+    
+    UTF-8で読み込みを試み、失敗した場合はShift-JISで読み込む。
+    
+    Args:
+        file_path: ファイルパス
+    
+    Returns:
+        Tuple[コンテンツ or None, 検出されたエンコーディング]
+    """
+    # まずUTF-8で試行
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read(), 'utf-8'
+    except UnicodeDecodeError:
+        pass
+    
+    # UTF-8で失敗した場合、Shift-JISで試行
+    try:
+        with open(file_path, 'r', encoding='shift_jis') as f:
+            return f.read(), 'shift_jis'
+    except UnicodeDecodeError:
+        pass
+    except Exception:
+        pass
+    
+    # 両方失敗した場合
+    return None, 'unknown'
+
+
+def write_source_file(file_path: str, content: str, encoding: str = 'shift_jis') -> bool:
+    """
+    ソースファイルを書き込む
+    
+    Args:
+        file_path: ファイルパス
+        content: 書き込む内容
+        encoding: エンコーディング（デフォルト: shift_jis）
+    
+    Returns:
+        成功した場合True
+    """
+    try:
+        with open(file_path, 'w', encoding=encoding) as f:
+            f.write(content)
+        return True
+    except Exception as e:
+        print(f"   ⚠ ファイル書き込みエラー: {e}")
+        return False
+
 
 # 出力ディレクトリ管理をインライン関数として定義
 def get_unique_output_dir(base_dir: str) -> Path:
@@ -188,12 +244,10 @@ class CTestAutoGenerator:
             print(f"   ✓ 解析完了: {len(parsed_data.conditions)}個の条件を検出")
             
             # v2.2: ソースコードを読み込み（関数本体抽出用）
-            source_code = None
-            try:
-                with open(c_file_path, 'r', encoding='utf-8') as f:
-                    source_code = f.read()
-            except Exception as e:
-                print(f"   ⚠ ソースコード読み込みエラー（関数本体は含まれません）: {e}")
+            # v4.0: エンコーディング自動検出
+            source_code, detected_encoding = read_source_file(c_file_path)
+            if source_code is None:
+                print(f"   ⚠ ソースコード読み込みエラー（関数本体は含まれません）")
             
             # 2. 真偽表を生成
             print(f"📊 Step 2/4: MC/DC真偽表を生成中...")
@@ -214,16 +268,20 @@ class CTestAutoGenerator:
                 standalone_code = self.test_generator.generate_standalone(
                     truth_table, parsed_data, source_code
                 )
-                # スタンドアロン版をファイルに保存
-                with open(str(test_code_path), 'w', encoding='utf-8') as f:
-                    f.write(standalone_code)
-                result.test_code_path = test_code_path
-                print(f"   ✓ スタンドアロン版テストコード生成完了")
+                # v4.0: Shift-JISで出力
+                if write_source_file(str(test_code_path), standalone_code, encoding='shift_jis'):
+                    result.test_code_path = test_code_path
+                    print(f"   ✓ スタンドアロン版テストコード生成完了（Shift-JIS）")
+                else:
+                    raise Exception("テストコードの書き込みに失敗しました")
             else:
                 # 従来の方式（v2.2: source_codeを渡す）
-                test_code.save(str(test_code_path))
-                result.test_code_path = test_code_path
-                print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数")
+                # v4.0: Shift-JISで出力
+                if write_source_file(str(test_code_path), test_code.to_string(), encoding='shift_jis'):
+                    result.test_code_path = test_code_path
+                    print(f"   ✓ テストコード生成完了: {len(test_code.test_functions)}個のテスト関数（Shift-JIS）")
+                else:
+                    raise Exception("テストコードの書き込みに失敗しました")
             
             # 4. I/O表を生成
             print(f"📝 Step 4/4: I/O一覧表を生成中...")
@@ -304,28 +362,22 @@ class CTestAutoGenerator:
             print(f"🔍 C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
             
-            # v3.3.0: ソースコードを読み込んでテスト対象関数の抽出に使用
-            source_code = None
-            try:
-                with open(c_file_path, 'r', encoding='utf-8') as f:
-                    source_code = f.read()
-            except UnicodeDecodeError:
-                try:
-                    with open(c_file_path, 'r', encoding='shift_jis') as f:
-                        source_code = f.read()
-                except:
-                    pass  # source_codeがNoneの場合、テスト対象関数は含まれない
+            # v4.0: エンコーディング自動検出
+            source_code, detected_encoding = read_source_file(c_file_path)
             
             print(f"📊 MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
             
             print(f"🧪 Unityテストコードを生成中...")
             test_code = self.test_generator.generate(truth_table, parsed_data, source_code)
-            test_code.save(output_path)
             
-            result.test_code_path = Path(output_path)
-            result.success = True
-            print(f"✅ テストコードの生成が完了しました: {output_path}")
+            # v4.0: Shift-JISで出力
+            if write_source_file(output_path, test_code.to_string(), encoding='shift_jis'):
+                result.test_code_path = Path(output_path)
+                result.success = True
+                print(f"✅ テストコードの生成が完了しました: {output_path}（Shift-JIS）")
+            else:
+                raise Exception("テストコードの書き込みに失敗しました")
             
         except Exception as e:
             result.success = False
@@ -357,17 +409,8 @@ class CTestAutoGenerator:
             print(f"🔍 C言語ファイルを解析中... ({c_file_path})")
             parsed_data = self.parser.parse(c_file_path, target_function=target_function)
             
-            # v3.3.0: ソースコードを読み込んでテスト対象関数の抽出に使用
-            source_code = None
-            try:
-                with open(c_file_path, 'r', encoding='utf-8') as f:
-                    source_code = f.read()
-            except UnicodeDecodeError:
-                try:
-                    with open(c_file_path, 'r', encoding='shift_jis') as f:
-                        source_code = f.read()
-                except:
-                    pass  # source_codeがNoneの場合、テスト対象関数は含まれない
+            # v4.0: エンコーディング自動検出
+            source_code, detected_encoding = read_source_file(c_file_path)
             
             print(f"📊 MC/DC真偽表を生成中...")
             truth_table = self.truth_table_generator.generate(parsed_data)
