@@ -1,12 +1,7 @@
-# AutoUniTestGen v4.1 - シーケンス図
+# AutoUniTestGen v4.2.0 シーケンス図
 
 ## 概要
-C言語単体テスト自動生成ツール AutoUniTestGen v4.1のシーケンス図
-
-### v4.0からの主な変更点
-- **標準ライブラリ関数除外処理**: `#include`解析による自動除外
-- **シグネチャ一致モック生成**: 元の関数と同じシグネチャでモック生成
-- **エンコーディング自動検出**: UTF-8/Shift-JIS自動判別、Shift-JIS出力
+C言語単体テスト自動生成ツールの処理フローを示します。
 
 ---
 
@@ -14,404 +9,551 @@ C言語単体テスト自動生成ツール AutoUniTestGen v4.1のシーケン�
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Main as CTestAutoGenerator
-    participant Encoding as EncodingUtils
+    autonumber
+    participant User
+    participant CLI
+    participant Generator as CTestAutoGenerator
     participant Parser as CCodeParser
-    participant TruthTable as TruthTableGenerator
-    participant TestGen as UnityTestGenerator
-    participant IOTable as IOTableGenerator
-    participant Excel as ExcelWriter
-
-    User->>Main: generate_all(c_file_path, target_function, output_dir)
-    
-    Note over Main: Step 1: C言語ファイル解析
-    Main->>Parser: parse(c_file_path, target_function)
-    Parser-->>Main: ParsedData（関数情報, 条件分岐, シグネチャ）
-    
-    Note over Main: Step 2: ソースコード読み込み（エンコーディング自動検出）
-    Main->>Encoding: read_source_file(c_file_path)
-    Encoding-->>Main: (source_code, detected_encoding)
-    
-    Note over Main: Step 3: MC/DC真偽表生成
-    Main->>TruthTable: generate(parsed_data)
-    TruthTable-->>Main: TruthTableData
-    
-    Main->>Excel: write_truth_table(truth_table, filepath)
-    Excel-->>Main: truth_table.xlsx
-    
-    Note over Main: Step 4: Unityテストコード生成
-    Main->>TestGen: generate_standalone(truth_table, parsed_data, source_code)
-    TestGen-->>Main: standalone_code
-    
-    Main->>Encoding: write_source_file(filepath, code, 'shift_jis')
-    Encoding-->>Main: success
-    
-    Note over Main: Step 5: I/O表生成
-    Main->>IOTable: generate(test_code, truth_table)
-    IOTable-->>Main: IOTableData
-    
-    Main->>Excel: write_io_table(io_table, filepath)
-    Excel-->>Main: io_table.xlsx
-    
-    Main-->>User: GenerationResult（3ファイル生成完了）
-```
-
----
-
-## 2. CCodeParser詳細シーケンス（v4.1更新）
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
-    participant Parser as CCodeParser
-    participant Preprocessor as Preprocessor
-    participant ASTBuilder as ASTBuilder
-    participant CondExtractor as ConditionExtractor
-    participant StdlibExtractor as StdlibFunctionExtractor
-
-    Main->>Parser: parse(c_file_path, target_function)
-    
-    Note over Parser: 1. ファイル読み込み
-    Parser->>Parser: _read_file(c_file_path)
-    
-    Note over Parser: 2. プリプロセス処理
-    Parser->>Preprocessor: preprocess(c_code)
-    Preprocessor->>Preprocessor: _remove_comments()
-    Preprocessor->>Preprocessor: _process_defines()
-    Preprocessor->>Preprocessor: _handle_includes()
-    Preprocessor-->>Parser: preprocessed_code
-    
-    Note over Parser: 3. AST構築
-    Parser->>ASTBuilder: build_ast_with_fallback(preprocessed_code)
-    
-    alt AST構築成功
-        ASTBuilder-->>Parser: ast
-    else AST構築失敗
-        ASTBuilder->>ASTBuilder: フォールバックモード
-        ASTBuilder-->>Parser: partial_ast
-    end
-    
-    Note over Parser: 4. 関数情報・シグネチャ抽出
-    Parser->>Parser: _extract_function_info(ast, target_function)
-    Parser->>Parser: _extract_function_signatures(ast, code)
-    
-    Note over Parser: 5. 条件分岐抽出
-    Parser->>CondExtractor: extract_conditions(ast)
-    CondExtractor->>CondExtractor: visit_FuncDef()
-    CondExtractor->>CondExtractor: visit_If()
-    CondExtractor->>CondExtractor: visit_Switch()
-    CondExtractor-->>Parser: conditions_list
-    
-    Note over Parser: 6. 外部関数抽出（v4.1: 標準ライブラリ除外）
-    Parser->>Parser: _extract_external_functions(conditions, ast, source_code)
-    Parser->>StdlibExtractor: filter_external_functions(functions, source_code)
-    
-    Note over StdlibExtractor: #includeを解析して標準ライブラリ関数を除外
-    StdlibExtractor->>StdlibExtractor: extract_includes_from_source()
-    StdlibExtractor->>StdlibExtractor: is_stdlib_function() for each
-    StdlibExtractor-->>Parser: filtered_external_functions
-    
-    Note over Parser: 7. グローバル変数・enum抽出
-    Parser->>Parser: _extract_global_variables(ast)
-    Parser->>Parser: _extract_enums(ast)
-    
-    Parser-->>Main: ParsedData
-```
-
----
-
-## 3. 標準ライブラリ関数除外処理（v4.1新規）
-
-```mermaid
-sequenceDiagram
-    participant Parser as CCodeParser
-    participant StdlibExtractor as StdlibFunctionExtractor
-    participant FileSystem as ファイルシステム
-
-    Parser->>StdlibExtractor: filter_external_functions(external_funcs, source_code)
-    
-    Note over StdlibExtractor: 1. #includeディレクティブを抽出
-    StdlibExtractor->>StdlibExtractor: extract_includes_from_source(source_code)
-    Note right of StdlibExtractor: #include <stdio.h><br/>#include <stdlib.h><br/>#include <math.h><br/>#include "my_header.h"
-    
-    loop 各インクルードヘッダ
-        alt 標準ライブラリヘッダ
-            StdlibExtractor->>StdlibExtractor: is_stdlib_header(header)?
-            
-            Note over StdlibExtractor: 2. ヘッダファイルを検索
-            StdlibExtractor->>FileSystem: find_header_file(header_name)
-            
-            alt ヘッダファイル発見
-                FileSystem-->>StdlibExtractor: /usr/include/stdio.h
-                
-                Note over StdlibExtractor: 3. ヘッダから関数宣言を抽出
-                StdlibExtractor->>StdlibExtractor: extract_functions_from_header()
-                Note right of StdlibExtractor: printf, scanf, fopen...<br/>正規表現で関数宣言を解析
-                
-            else ヘッダファイル未発見
-                Note over StdlibExtractor: フォールバックリスト使用
-                StdlibExtractor->>StdlibExtractor: use FALLBACK_STDLIB_FUNCTIONS
-            end
-        else ユーザーヘッダ
-            Note over StdlibExtractor: スキップ（モック対象）
-        end
-    end
-    
-    Note over StdlibExtractor: 4. 外部関数をフィルタリング
-    loop 各外部関数
-        StdlibExtractor->>StdlibExtractor: is_stdlib_function(func_name)?
-        
-        alt 標準ライブラリ関数
-            Note right of StdlibExtractor: abs, printf, strlen → 除外
-        else ユーザー定義関数
-            Note right of StdlibExtractor: Utf8, my_func → 残す
-        end
-    end
-    
-    StdlibExtractor-->>Parser: filtered_functions（標準ライブラリ除外済み）
-```
-
----
-
-## 4. モック生成処理（v4.0/v4.1更新）
-
-```mermaid
-sequenceDiagram
-    participant TestGen as UnityTestGenerator
-    participant MockGen as MockGenerator
-    participant ParsedData as ParsedData
-
-    TestGen->>MockGen: generate_mocks(parsed_data)
-    
-    Note over MockGen: 1. 外部関数リストを取得（標準ライブラリ除外済み）
-    MockGen->>ParsedData: external_functions
-    ParsedData-->>MockGen: ['Utf8', 'Utf9', 'f4', 'mx27']
-    
-    Note over MockGen: 2. シグネチャ情報を取得
-    MockGen->>ParsedData: function_signatures
-    ParsedData-->>MockGen: {Utf8: FunctionSignature, ...}
-    
-    loop 各外部関数
-        MockGen->>MockGen: _create_mock_function(func_name, signature)
-        
-        alt シグネチャあり
-            Note right of MockGen: uint8_t Utf8(void)<br/>uint16_t Utf9(uint8_t, int)
-            MockGen->>MockGen: 元のシグネチャを使用
-        else シグネチャなし
-            MockGen->>MockGen: _guess_return_type()でフォールバック
-        end
-    end
-    
-    Note over MockGen: 3. モック変数生成
-    MockGen->>MockGen: generate_mock_variables()
-    Note right of MockGen: static uint8_t mock_Utf8_return_value;<br/>static int mock_Utf8_call_count;<br/>static uint8_t mock_Utf9_param_param1;
-    
-    Note over MockGen: 4. モック関数生成（元の関数と同名・同シグネチャ）
-    MockGen->>MockGen: generate_mock_functions()
-    Note right of MockGen: uint8_t Utf8(void) {<br/>  mock_Utf8_call_count++;<br/>  return mock_Utf8_return_value;<br/>}
-    
-    Note over MockGen: 5. void型関数の特別処理
-    Note right of MockGen: void Utf10(uint8_t Utv2) {<br/>  mock_Utf10_call_count++;<br/>  mock_Utf10_param_Utv2 = Utv2;<br/>  // return文なし<br/>}
-    
-    Note over MockGen: 6. リセット関数生成
-    MockGen->>MockGen: generate_reset_function()
-    
-    MockGen-->>TestGen: mock_code
-```
-
----
-
-## 5. TruthTableGenerator詳細シーケンス
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
     participant TruthGen as TruthTableGenerator
-    participant CondAnalyzer as ConditionAnalyzer
-    participant MCDCGen as MCDCPatternGenerator
-
-    Main->>TruthGen: generate(parsed_data)
-    
-    loop 各条件分岐
-        TruthGen->>CondAnalyzer: analyze_condition(condition)
-        
-        alt 単純if文
-            CondAnalyzer->>CondAnalyzer: 条件式解析
-            CondAnalyzer-->>TruthGen: {type: "simple", patterns: ["T", "F"]}
-            
-        else OR条件 (A || B)
-            CondAnalyzer->>CondAnalyzer: _build_condition_tree()
-            CondAnalyzer->>MCDCGen: generate_patterns(tree)
-            MCDCGen->>MCDCGen: _generate_independence_pairs()
-            MCDCGen-->>CondAnalyzer: ["TF", "FT", "FF"]
-            CondAnalyzer-->>TruthGen: {type: "or", patterns: [...]}
-            
-        else AND条件 (A && B)
-            CondAnalyzer->>CondAnalyzer: _build_condition_tree()
-            CondAnalyzer->>MCDCGen: generate_patterns(tree)
-            MCDCGen-->>CondAnalyzer: ["TF", "FT", "TT"]
-            CondAnalyzer-->>TruthGen: {type: "and", patterns: [...]}
-            
-        else 複合条件 (A || B || (C && D))
-            CondAnalyzer->>CondAnalyzer: _build_condition_tree()
-            Note right of CondAnalyzer: ツリー構造で解析
-            CondAnalyzer->>MCDCGen: generate_patterns(complex_tree)
-            MCDCGen->>MCDCGen: 再帰的にパターン生成
-            MCDCGen-->>CondAnalyzer: [6パターン]
-            CondAnalyzer-->>TruthGen: {type: "complex", patterns: [...]}
-            
-        else switch文
-            CondAnalyzer->>CondAnalyzer: case文を全抽出
-            CondAnalyzer-->>TruthGen: {type: "switch", cases: [0,1,2,...,default]}
-        end
-    end
-    
-    TruthGen->>TruthGen: 真偽表データ構築
-    TruthGen->>TruthGen: テスト番号採番
-    TruthGen-->>Main: TruthTableData
-```
-
----
-
-## 6. エンコーディング処理（v4.0.1新規）
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
-    participant Encoding as EncodingUtils
-    participant FileSystem as ファイルシステム
-
-    Note over Main,FileSystem: ===== 読み込み処理 =====
-    Main->>Encoding: read_source_file(c_file_path)
-    
-    Encoding->>FileSystem: open(path, encoding='utf-8')
-    
-    alt UTF-8で成功
-        FileSystem-->>Encoding: content
-        Encoding-->>Main: (content, 'utf-8')
-    else UnicodeDecodeError
-        Encoding->>FileSystem: open(path, encoding='shift_jis')
-        
-        alt Shift-JISで成功
-            FileSystem-->>Encoding: content
-            Encoding-->>Main: (content, 'shift_jis')
-        else 両方失敗
-            Encoding-->>Main: (None, 'unknown')
-        end
-    end
-    
-    Note over Main,FileSystem: ===== 書き込み処理 =====
-    Main->>Encoding: write_source_file(path, content, 'shift_jis')
-    
-    Encoding->>FileSystem: open(path, 'w', encoding='shift_jis')
-    FileSystem-->>Encoding: success
-    Encoding-->>Main: True
-    
-    Note right of Main: 出力は常にShift-JIS<br/>（組込み開発環境互換）
-```
-
----
-
-## 7. スタンドアロンモード処理フロー
-
-```mermaid
-sequenceDiagram
-    participant Main as CTestAutoGenerator
     participant TestGen as UnityTestGenerator
-    participant MockGen as MockGenerator
-    participant Encoding as EncodingUtils
-
-    Main->>TestGen: generate_standalone(truth_table, parsed_data, source_code)
+    participant IOGen as IOTableGenerator
+    participant Excel as ExcelWriter
     
-    Note over TestGen: 1. 元のソースコード全体を基盤として使用
-    TestGen->>TestGen: source_code をベースに
+    User->>CLI: python main.py -i source.c -f func_name -o output/
+    CLI->>CLI: parse_args()
+    CLI->>Generator: create(config)
+    CLI->>Generator: generate_all(c_file_path, target_function, output_dir)
     
-    Note over TestGen: 2. テスト対象関数本体を抽出
-    TestGen->>TestGen: _extract_target_function_body()
+    Note over Generator: Phase 1: ソースコード解析
+    Generator->>Parser: parse(source_code, function_name)
+    Parser-->>Generator: ParsedData
     
-    Note over TestGen: 3. モック/スタブコードを生成
-    TestGen->>MockGen: generate_mocks(parsed_data)
-    MockGen-->>TestGen: mock_code
+    Note over Generator: Phase 2: 真偽表生成
+    Generator->>TruthGen: generate(parsed_data)
+    TruthGen-->>Generator: TruthTableData
+    Generator->>Excel: write_truth_table(truth_table, path)
     
-    Note over TestGen: 4. テスト関数を生成
-    TestGen->>TestGen: _generate_test_functions()
+    Note over Generator: Phase 3: テストコード生成
+    Generator->>TestGen: generate(truth_table, parsed_data, source_code)
+    TestGen-->>Generator: TestCode
+    Generator->>Generator: save_test_code(test_code, path)
     
-    Note over TestGen: 5. Unity関連コードを生成
-    TestGen->>TestGen: _generate_unity_includes()
-    TestGen->>TestGen: _generate_setup_teardown()
-    TestGen->>TestGen: _generate_main()
+    Note over Generator: Phase 4: I/O表生成
+    Generator->>IOGen: generate(truth_table, parsed_data)
+    IOGen-->>Generator: IOTableData
+    Generator->>Excel: write_io_table(io_table, path)
     
-    Note over TestGen: 6. 全コードを結合
-    TestGen->>TestGen: ソースコード + モック + テスト関数 + main
-    
-    TestGen-->>Main: standalone_code
-    
-    Note over Main: 7. Shift-JISで出力
-    Main->>Encoding: write_source_file(path, standalone_code, 'shift_jis')
+    Generator-->>CLI: GenerationResult
+    CLI-->>User: 完了メッセージ + 出力ファイル一覧
 ```
 
 ---
 
-## データ構造
+## 2. ソースコード解析詳細 (CCodeParser.parse)
 
-### ParsedData（v4.1）
-```python
-{
-    'file_name': '22_難読化_obfuscated.c',
-    'function_name': 'Utf1',
-    'conditions': [
-        {
-            'line': 10,
-            'type': 'if',
-            'expression': '(Utf7() & 0xdf) != 0',
-            'ast_node': <AST Node>
-        },
-        ...
-    ],
-    'external_functions': ['Utf7', 'Utf8', 'Utf9', ...],  # 標準ライブラリ除外済み
-    'global_variables': ['Utv1', 'Utv2', ...],
-    'function_signatures': {
-        'Utf7': FunctionSignature(name='Utf7', return_type='uint8_t', parameters=[]),
-        'Utf8': FunctionSignature(name='Utf8', return_type='void', parameters=[]),
-        'Utf9': FunctionSignature(name='Utf9', return_type='uint16_t', 
-                                  parameters=[{'type': 'uint8_t', 'name': 'param1'}]),
-        ...
-    },
-    'function_info': FunctionInfo(name='Utf1', return_type='void', ...),
-    'bitfields': {...},
-    'enums': [...],
-    'enum_values': {...}
-}
-```
-
-### FunctionSignature（v4.0新規）
-```python
-FunctionSignature(
-    name='Utf9',
-    return_type='uint16_t',
-    parameters=[
-        {'type': 'uint8_t', 'name': 'param1'},
-        {'type': 'int', 'name': 'param2'}
-    ],
-    is_static=False
-)
-```
-
-### MockFunction（v4.0新規）
-```python
-MockFunction(
-    name='Utf9',
-    return_type='uint16_t',
-    parameters=[
-        {'type': 'uint8_t', 'name': 'param1'},
-        {'type': 'int', 'name': 'param2'}
-    ],
-    return_variable='mock_Utf9_return_value',
-    call_count_variable='mock_Utf9_call_count'
-)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Gen as CTestAutoGenerator
+    participant Parser as CCodeParser
+    participant Prep as Preprocessor
+    participant Cond as ConditionExtractor
+    participant Type as TypedefExtractor
+    participant Var as VariableDeclExtractor
+    participant Src as SourceDefinitionExtractor
+    participant Stdlib as StdlibFunctionExtractor
+    participant Dep as DependencyResolver
+    
+    Gen->>Parser: parse(source_code, function_name)
+    
+    Note over Parser: Step 1: プリプロセス
+    Parser->>Prep: preprocess(source_code)
+    Prep->>Prep: expand_macros()
+    Prep->>Prep: remove_comments()
+    Prep->>Prep: collect_function_macros()
+    Prep-->>Parser: preprocessed_code
+    
+    Note over Parser: Step 2: 型定義抽出
+    Parser->>Type: extract_typedefs(code)
+    Type-->>Parser: List[TypedefInfo]
+    Parser->>Type: extract_struct_definitions()
+    Type-->>Parser: List[StructDefinition]
+    
+    Note over Parser: Step 3: 変数抽出
+    Parser->>Var: extract_variables(code)
+    Var-->>Parser: List[VariableDeclInfo]
+    Parser->>Var: extract_global_variables()
+    Var-->>Parser: List[str]
+    
+    Note over Parser: Step 4: ソース定義抽出
+    Parser->>Src: extract_definitions(code)
+    Src->>Src: extract_enums()
+    Src->>Src: extract_bitfields()
+    Src-->>Parser: Dict[definitions]
+    
+    Note over Parser: Step 5: 条件分岐抽出
+    Parser->>Cond: extract_conditions(code, function_name)
+    Cond->>Cond: find_if_statements()
+    Cond->>Cond: parse_compound_conditions()
+    Cond-->>Parser: List[Condition]
+    
+    Note over Parser: Step 6: 外部関数抽出 (v4.1.1修正)
+    Parser->>Parser: _extract_external_functions()
+    Parser->>Prep: get_function_macro_names()
+    Prep-->>Parser: Set[macro_names]
+    Parser->>Stdlib: filter_stdlib_functions(functions)
+    Stdlib-->>Parser: List[external_functions]
+    Parser->>Parser: functions = functions - macro_names
+    
+    Note over Parser: Step 7: 関数シグネチャ抽出 (v4.0)
+    Parser->>Parser: _extract_function_signatures()
+    Parser-->>Parser: Dict[FunctionSignature]
+    
+    Note over Parser: Step 8: ローカル変数抽出 (v4.2.0 新規)
+    Parser->>Parser: _extract_local_variables(code, function_name)
+    Parser-->>Parser: Dict[LocalVariableInfo]
+    
+    Note over Parser: Step 9: 依存関係解決
+    Parser->>Dep: resolve_order(typedefs)
+    Dep->>Dep: build_dependency_graph()
+    Dep->>Dep: topological_sort()
+    Dep-->>Parser: sorted_typedefs
+    
+    Parser->>Parser: create ParsedData (with local_variables)
+    Parser-->>Gen: ParsedData
 ```
 
 ---
-**バージョン**: 4.1.0  
-**更新日**: 2025-12-01
+
+## 3. ローカル変数抽出詳細 (v4.2.0 新規)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Parser as CCodeParser
+    participant Regex as RegexEngine
+    
+    Note over Parser: _extract_local_variables(code, function_name)
+    
+    Parser->>Parser: 関数本体を正規表現で抽出
+    Note over Parser: static void Utf1(uint8_t Utv1) { ... }
+    
+    Parser->>Parser: 対応する閉じ括弧を探索
+    Parser->>Parser: function_body を取得
+    
+    loop 各行について
+        Parser->>Parser: コメント除去
+        Parser->>Parser: for文の初期化部分を除外
+        Parser->>Parser: 関数呼び出しを除外
+        
+        Parser->>Regex: 型名+変数名パターンを検索
+        Note over Regex: pattern = r'(\w+)\s+(\w+)\s*(?:=\s*([^;]+))?\s*;'
+        
+        alt マッチあり
+            Regex-->>Parser: type_name, var_name, init_value
+            Parser->>Parser: キーワードチェック (if, for, etc.)
+            Parser->>Parser: LocalVariableInfo作成
+            Note over Parser: {name: Utx73, type: Utx10, scope: Utf1}
+        end
+    end
+    
+    Parser-->>Parser: Dict[var_name, LocalVariableInfo]
+```
+
+---
+
+## 4. テスト関数生成詳細 (v4.2.0 修正)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Unity as UnityTestGenerator
+    participant TFunc as TestFunctionGenerator
+    participant Boundary as BoundaryValueCalculator
+    participant VResolver as ValueResolver
+    participant Comment as CommentGenerator
+    
+    Unity->>TFunc: generate_test_function(test_case, parsed_data)
+    
+    TFunc->>Comment: generate_comment(test_case, parsed_data)
+    Comment-->>TFunc: comment
+    
+    TFunc->>TFunc: _generate_test_name()
+    
+    Note over TFunc: 変数初期化コード生成
+    TFunc->>TFunc: _generate_variable_init(test_case, parsed_data)
+    
+    loop 各条件変数
+        TFunc->>Boundary: generate_test_value_with_parsed_data(expr, truth, data)
+        
+        Note over Boundary: v4.2.0: 数値リテラルチェック
+        alt 変数名が数値 (例: "10")
+            Boundary-->>TFunc: "// TODO: 数値リテラル 10 は初期化できません"
+        else 識別子同士の比較 (>=, <=, >, <)
+            Boundary->>VResolver: resolve_smaller_value(value) or resolve_larger_value(value)
+            VResolver-->>Boundary: (値, コメント)
+            Boundary-->>TFunc: "Utx75.Utm1.Utm11 = 0;  // Utx220より小さい値"
+        else 通常の比較
+            Boundary-->>TFunc: "variable = value"
+        end
+        
+        Note over TFunc: v4.2.0: 初期化コード後処理
+        TFunc->>TFunc: _process_init_code(init, parsed_data, lines)
+    end
+    
+    TFunc->>TFunc: _generate_mock_setup()
+    TFunc->>TFunc: _build_function_call_params(parsed_data) v4.1.3
+    TFunc->>TFunc: _generate_assertions()
+    TFunc->>TFunc: _generate_call_count_check()
+    
+    TFunc-->>Unity: test_function_code
+```
+
+---
+
+## 5. 初期化コード後処理詳細 (v4.2.0 新規)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant TFunc as TestFunctionGenerator
+    participant PData as ParsedData
+    
+    Note over TFunc: _process_init_code(init, parsed_data, lines)
+    
+    alt initがNullまたはコメント
+        TFunc-->>TFunc: return init (そのまま)
+    end
+    
+    TFunc->>TFunc: "変数 = 値" 形式からvar_partを抽出
+    Note over TFunc: init = "Utx73.Utm13 = 0xDEAD"
+    Note over TFunc: var_part = "Utx73.Utm13"
+    
+    Note over TFunc: 問題3チェック: 数値リテラル
+    alt var_partが数値 (例: "10")
+        TFunc-->>TFunc: "// TODO: 数値リテラル 10 は変数ではないため初期化できません"
+    end
+    
+    Note over TFunc: 問題2チェック: 構造体メンバー
+    alt var_partに "." を含む
+        TFunc->>TFunc: root_var = var_part.split('.')[0]
+        Note over TFunc: root_var = "Utx73"
+        
+        Note over TFunc: 問題1チェック: ローカル変数
+        TFunc->>TFunc: _is_local_variable(root_var, parsed_data)
+        TFunc->>PData: local_variables[root_var]
+        
+        alt ローカル変数である
+            PData-->>TFunc: LocalVariableInfo{type=Utx10}
+            TFunc->>TFunc: lines.append("Utx10 Utx73 = {0};  // ローカル変数")
+            TFunc-->>TFunc: return init (完全パス維持)
+        else グローバル変数
+            TFunc-->>TFunc: return init (そのまま)
+        end
+    end
+    
+    Note over TFunc: 単独変数のローカル変数チェック
+    TFunc->>TFunc: _is_local_variable(var_part, parsed_data)
+    alt ローカル変数である
+        TFunc->>TFunc: 宣言を追加
+        TFunc-->>TFunc: return init
+    else グローバル変数
+        TFunc-->>TFunc: return init
+    end
+```
+
+---
+
+## 6. 境界値計算詳細 (v4.2.0 修正)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Boundary as BoundaryValueCalculator
+    participant VResolver as ValueResolver
+    
+    Note over Boundary: generate_test_value_with_parsed_data(expr, truth, data)
+    
+    Boundary->>Boundary: parse_comparison(expr)
+    Note over Boundary: expr = "(Utx75.Utm1.Utm11 >= Utx220)"
+    
+    Note over Boundary: v4.2.0: 識別子パターン拡張
+    Note over Boundary: 新規追加: >=, <=, >, < パターン
+    
+    Boundary-->>Boundary: {variable: "Utx75.Utm1.Utm11", operator: ">=", value: "Utx220", is_identifier: True}
+    
+    Note over Boundary: v4.2.0: 数値リテラルチェック
+    alt variable.isdigit()
+        Boundary-->>Boundary: "// TODO: 数値リテラル X は変数ではないため初期化できません"
+    end
+    
+    alt is_identifier && operator == ">="
+        alt truth == "T"
+            Boundary-->>Boundary: "variable = value"
+            Note over Boundary: Utx75.Utm1.Utm11 = Utx220
+        else truth == "F"
+            Boundary->>VResolver: resolve_smaller_value("Utx220")
+            VResolver-->>Boundary: ("0", "Utx220より小さい値")
+            Boundary-->>Boundary: "variable = 0;  // Utx220より小さい値"
+        end
+    else is_identifier && operator == ">"
+        alt truth == "T"
+            Boundary->>VResolver: resolve_larger_value("value")
+            VResolver-->>Boundary: (larger_value, comment)
+        else truth == "F"
+            Boundary-->>Boundary: "variable = value"
+        end
+    end
+```
+
+---
+
+## 7. ValueResolver 大小比較処理 (v4.2.0 新規)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant VResolver as ValueResolver
+    
+    Note over VResolver: resolve_smaller_value(value)
+    
+    alt value が数値
+        VResolver->>VResolver: num = parse_numeric(value)
+        VResolver->>VResolver: smaller = num - 1
+        VResolver-->>VResolver: (str(smaller), "valueより小さい値")
+    else value がマクロ定数
+        VResolver->>VResolver: macro_val = get_macro_value(value)
+        VResolver->>VResolver: num = parse_numeric(macro_val)
+        VResolver->>VResolver: smaller = num - 1
+        VResolver-->>VResolver: (str(smaller), "value(=macro_val)より小さい値")
+    else 不明な識別子
+        VResolver-->>VResolver: ("0", "valueより小さい値（境界値）")
+    end
+    
+    Note over VResolver: resolve_larger_value(value)
+    
+    alt value が数値
+        VResolver->>VResolver: num = parse_numeric(value)
+        VResolver->>VResolver: larger = num + 1
+        VResolver-->>VResolver: (str(larger), "valueより大きい値")
+    else value がマクロ定数
+        VResolver->>VResolver: macro_val = get_macro_value(value)
+        VResolver->>VResolver: num = parse_numeric(macro_val)
+        VResolver->>VResolver: larger = num + 1
+        VResolver-->>VResolver: (str(larger), "value(=macro_val)より大きい値")
+    else 不明な識別子
+        VResolver-->>VResolver: ("0xDEAD", "valueより大きい値（境界値）")
+    end
+```
+
+---
+
+## 8. 真偽表生成詳細 (TruthTableGenerator.generate)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Gen as CTestAutoGenerator
+    participant TTGen as TruthTableGenerator
+    participant Analyzer as ConditionAnalyzer
+    participant MCDC as MCDCPatternGenerator
+    
+    Gen->>TTGen: generate(parsed_data)
+    
+    loop 各条件について
+        TTGen->>Analyzer: analyze(condition)
+        
+        alt 単純条件 (SIMPLE_IF)
+            Analyzer->>Analyzer: _analyze_simple_condition()
+            Analyzer-->>TTGen: AnalyzedCondition
+            TTGen->>MCDC: generate_patterns(condition)
+            Note over MCDC: T, F の2パターン
+            MCDC-->>TTGen: [T, F]
+            
+        else OR条件 (A || B || C)
+            Analyzer->>Analyzer: _analyze_compound_condition()
+            Analyzer->>Analyzer: split_conditions('||')
+            Analyzer-->>TTGen: AnalyzedCondition(conditions=[A,B,C])
+            TTGen->>MCDC: generate_or_patterns(3)
+            Note over MCDC: TXX, FTX, FFT, FFF の4パターン
+            MCDC-->>TTGen: [TXX, FTX, FFT, FFF]
+            
+        else AND条件 (A && B && C)
+            Analyzer->>Analyzer: _analyze_compound_condition()
+            Analyzer->>Analyzer: split_conditions('&&')
+            Analyzer-->>TTGen: AnalyzedCondition(conditions=[A,B,C])
+            TTGen->>MCDC: generate_and_patterns(3)
+            Note over MCDC: TTT, FXX, TFX, TTF の4パターン
+            MCDC-->>TTGen: [TTT, FXX, TFX, TTF]
+            
+        else ネスト条件 (A || (B && C))
+            Analyzer->>Analyzer: _analyze_nested_condition()
+            Analyzer-->>TTGen: AnalyzedCondition(nested)
+            TTGen->>MCDC: generate_nested_patterns(condition)
+            Note over MCDC: 再帰的にパターン生成
+            MCDC-->>TTGen: patterns
+        end
+        
+        TTGen->>TTGen: create TestCase for each pattern
+    end
+    
+    TTGen->>TTGen: create TruthTableData
+    TTGen-->>Gen: TruthTableData
+```
+
+---
+
+## 9. モックリセット関数生成詳細 (v4.1.2)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Mock as MockGenerator
+    
+    Note over Mock: generate_reset_function()
+    Mock->>Mock: lines = ["static void reset_all_mocks(void) {"]
+    
+    loop 各関数のモック変数
+        Mock->>Mock: get return_value type
+        Mock->>Mock: _is_primitive_type(type)?
+        
+        alt プリミティブ型 (int, uint8_t, bool, etc.)
+            Mock->>Mock: "mock_XXX_return_value = 0;"
+        else ポインタ型 (* in type)
+            Mock->>Mock: "mock_XXX_return_value = NULL;"
+        else 構造体/union型
+            Mock->>Mock: "memset(&mock_XXX_return_value, 0, sizeof(...));"
+            Mock->>Mock: _needs_string_h = True
+        end
+        
+        Mock->>Mock: "mock_XXX_call_count = 0;"
+        
+        loop 各パラメータ
+            Mock->>Mock: get param type
+            Mock->>Mock: _get_init_code(param_name, param_type)
+        end
+    end
+    
+    Mock->>Mock: lines.append("}")
+    Mock-->>Mock: reset_function_code
+```
+
+---
+
+## 10. I/O表生成詳細
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Gen as CTestAutoGenerator
+    participant IOGen as IOTableGenerator
+    participant VarExt as IOVariableExtractor
+    
+    Gen->>IOGen: generate(truth_table, parsed_data)
+    
+    IOGen->>IOGen: collect_input_variables(parsed_data)
+    Note over IOGen: グローバル変数 + 関数パラメータ
+    
+    IOGen->>IOGen: collect_output_variables(parsed_data)
+    Note over IOGen: グローバル変数 + 戻り値
+    
+    loop 各テストケース
+        IOGen->>VarExt: extract_io_variables(test_case, parsed_data)
+        VarExt->>VarExt: extract_inputs_from_condition()
+        VarExt->>VarExt: extract_outputs_from_expected()
+        VarExt-->>IOGen: {inputs: {...}, outputs: {...}}
+        IOGen->>IOGen: add_test_data(io_data)
+    end
+    
+    IOGen->>IOGen: create IOTableData
+    IOGen-->>Gen: IOTableData
+```
+
+---
+
+## v4.2.0 修正フロー全体図
+
+```mermaid
+flowchart TB
+    subgraph Input["入力"]
+        A[C言語ソースコード]
+    end
+    
+    subgraph Parse["解析フェーズ v4.2.0"]
+        B[CCodeParser.parse]
+        C[_extract_local_variables]
+        D[LocalVariableInfo辞書]
+    end
+    
+    subgraph Generate["テストコード生成フェーズ v4.2.0"]
+        E[TestFunctionGenerator]
+        F[_generate_variable_init]
+        G[BoundaryValueCalculator.generate_test_value_with_parsed_data]
+        H{数値リテラル?}
+        I{構造体メンバー?}
+        J{ローカル変数?}
+        K[_process_init_code]
+        L[ValueResolver.resolve_smaller/larger_value]
+    end
+    
+    subgraph Output["出力"]
+        M[テストコード]
+    end
+    
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H
+    H -->|Yes| N["// TODO: 数値リテラル..."]
+    H -->|No| I
+    I -->|Yes 完全パス維持| K
+    I -->|No| J
+    J -->|Yes| O[ローカル変数宣言追加]
+    J -->|No| P[グローバル変数初期化]
+    K --> J
+    G --> L
+    L --> K
+    N --> M
+    O --> M
+    P --> M
+```
+
+---
+
+## エラーハンドリングフロー
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant User
+    participant CLI
+    participant Gen as CTestAutoGenerator
+    participant Parser as CCodeParser
+    
+    User->>CLI: main.py -i invalid.c -f func
+    CLI->>Gen: generate_all()
+    
+    alt ファイルが存在しない
+        Gen-->>CLI: GenerationResult(success=False, error="ファイルが見つかりません")
+    else パース失敗
+        Gen->>Parser: parse()
+        Parser-->>Gen: ParseError
+        Gen-->>CLI: GenerationResult(success=False, error="パースエラー")
+    else 関数が見つからない
+        Gen->>Parser: parse()
+        Parser-->>Gen: ParsedData(conditions=[])
+        Gen-->>CLI: GenerationResult(success=False, error="関数が見つかりません")
+    else 成功
+        Gen-->>CLI: GenerationResult(success=True, paths=[...])
+    end
+    
+    CLI->>User: エラーメッセージまたは成功メッセージ
+```
+
+---
+
+**バージョン**: v4.2.0
+**作成日**: 2025-12-02

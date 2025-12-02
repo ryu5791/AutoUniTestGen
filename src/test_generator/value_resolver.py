@@ -424,6 +424,74 @@ class ValueResolver:
             return ("1", f"真 (ビット幅: {bit_width}, 最大値: 0x{max_val:X})")
         else:
             return ("0", f"偽 (ビット幅: {bit_width})")
+    
+    def resolve_smaller_value(self, value: str) -> Tuple[str, str]:
+        """
+        指定された値より小さい値を解決 (v4.2.0追加)
+        
+        Args:
+            value: 比較対象の値（数値、識別子、enum定数）
+        
+        Returns:
+            (より小さい値, コメント) のタプル
+        """
+        if not value:
+            return ("0", "不明な値より小さい値")
+        
+        value = value.strip()
+        
+        # 1. 数値の場合
+        if self.is_numeric(value):
+            num = self.parse_numeric(value)
+            if num is not None:
+                smaller = num - 1
+                return (str(smaller), f"{value}より小さい値")
+        
+        # 2. マクロ定数の場合
+        if self.is_macro_constant(value):
+            macro_val = self.get_macro_value(value)
+            if macro_val and self.is_numeric(macro_val):
+                num = self.parse_numeric(macro_val)
+                if num is not None:
+                    smaller = num - 1
+                    return (str(smaller), f"{value}(={macro_val})より小さい値")
+        
+        # 3. 不明な識別子の場合
+        return ("0", f"{value}より小さい値（境界値）")
+    
+    def resolve_larger_value(self, value: str) -> Tuple[str, str]:
+        """
+        指定された値より大きい値を解決 (v4.2.0追加)
+        
+        Args:
+            value: 比較対象の値（数値、識別子、enum定数）
+        
+        Returns:
+            (より大きい値, コメント) のタプル
+        """
+        if not value:
+            return ("1", "不明な値より大きい値")
+        
+        value = value.strip()
+        
+        # 1. 数値の場合
+        if self.is_numeric(value):
+            num = self.parse_numeric(value)
+            if num is not None:
+                larger = num + 1
+                return (str(larger), f"{value}より大きい値")
+        
+        # 2. マクロ定数の場合
+        if self.is_macro_constant(value):
+            macro_val = self.get_macro_value(value)
+            if macro_val and self.is_numeric(macro_val):
+                num = self.parse_numeric(macro_val)
+                if num is not None:
+                    larger = num + 1
+                    return (str(larger), f"{value}(={macro_val})より大きい値")
+        
+        # 3. 不明な識別子の場合
+        return (self.FALLBACK_VALUE_SHORT, f"{value}より大きい値（境界値）")
 
 
 # メインブロック（テスト用）

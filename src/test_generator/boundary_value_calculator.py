@@ -137,9 +137,14 @@ class BoundaryValueCalculator:
         
         # 次に、識別子同士の比較を試す（構造体メンバーアクセスを含む）
         # 構造体メンバーアクセスパターン: word.word または word[n].word
+        # v4.2.0: >= と <= パターンを追加
         identifier_patterns = [
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*>=\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '>='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*<=\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '<='),
             (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*==\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '=='),
             (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*!=\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '!='),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*>\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '>'),
+            (r'([\w\.]+(?:\[\d+\])?(?:\.[\w]+)*)\s*<\s*([\w\.]+(?:\(\))?(?:\.[\w]+)*)', '<'),
         ]
         
         for pattern, operator in identifier_patterns:
@@ -216,6 +221,7 @@ class BoundaryValueCalculator:
         テスト値を生成（parsed_data付き）
         
         v3.3.0追加: parsed_dataを使用してenum/マクロ値を解決
+        v4.2.0修正: 数値リテラルや関数呼び出し含む式への対応を強化
         
         Args:
             expression: 条件式
@@ -234,6 +240,11 @@ class BoundaryValueCalculator:
             is_identifier = comparison.get('is_identifier', False)
             is_function_call = comparison.get('is_function_call', False)
             is_right_function = comparison.get('is_right_function', False)
+            
+            # v4.2.0: 数値リテラルへの代入を防止（問題3対応）
+            # 変数名が数値の場合（例: "10"）は初期化コードを生成しない
+            if variable.isdigit() or (variable.startswith('-') and variable[1:].isdigit()):
+                return f"// TODO: 数値リテラル {variable} は変数ではないため初期化できません"
             
             # 左辺が関数呼び出しの場合は、変数として代入できないのでNoneを返す
             if is_function_call and not is_right_function:
@@ -256,8 +267,9 @@ class BoundaryValueCalculator:
                         return f"// mock_{func_name}_return_value を設定して {variable} と一致させる"
             
             if is_identifier:
-                # 識別子同士の比較（例: mx63 == m47）
+                # 識別子同士の比較（例: mx63 == m47, Utx75.Utm1.Utm11 >= Utx220）
                 # v3.3.0: ValueResolverを使用してTODOを解消
+                # v4.2.0: >=, <=, >, < の演算子にも対応
                 value_resolver = ValueResolver(parsed_data)
                 
                 if operator == '==':
@@ -274,6 +286,38 @@ class BoundaryValueCalculator:
                         return f"{variable} = {different_val};  // {comment}"
                     else:
                         return f"{variable} = {value}"
+                elif operator == '>=':
+                    if truth == 'T':
+                        # 真の場合: variable >= value → variable = value (以上)
+                        return f"{variable} = {value}"
+                    else:
+                        # 偽の場合: variable < value → variable = value より小さい値
+                        different_val, comment = value_resolver.resolve_smaller_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
+                elif operator == '<=':
+                    if truth == 'T':
+                        # 真の場合: variable <= value → variable = value (以下)
+                        return f"{variable} = {value}"
+                    else:
+                        # 偽の場合: variable > value → variable = value より大きい値
+                        different_val, comment = value_resolver.resolve_larger_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
+                elif operator == '>':
+                    if truth == 'T':
+                        # 真の場合: variable > value → variable = value より大きい値
+                        different_val, comment = value_resolver.resolve_larger_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
+                    else:
+                        # 偽の場合: variable <= value → variable = value (以下)
+                        return f"{variable} = {value}"
+                elif operator == '<':
+                    if truth == 'T':
+                        # 真の場合: variable < value → variable = value より小さい値
+                        different_val, comment = value_resolver.resolve_smaller_value(str(value))
+                        return f"{variable} = {different_val};  // {comment}"
+                    else:
+                        # 偽の場合: variable >= value → variable = value (以上)
+                        return f"{variable} = {value}"
             else:
                 # 数値との比較
                 test_value = self.calculate_boundary(operator, value, truth)
@@ -284,6 +328,8 @@ class BoundaryValueCalculator:
     def extract_variables(self, expression: str) -> list:
         """
         条件式から変数を抽出
+        
+        v4.2.0: 数値リテラルを除外するように修正
         
         Args:
             expression: 条件式
@@ -298,9 +344,12 @@ class BoundaryValueCalculator:
         # C言語キーワードを除外
         keywords = {'if', 'else', 'for', 'while', 'switch', 'case', 'default', 
                    'return', 'break', 'continue', 'sizeof', 'int', 'void', 'char',
-                   'short', 'long', 'float', 'double', 'struct', 'union', 'enum'}
+                   'short', 'long', 'float', 'double', 'struct', 'union', 'enum',
+                   'true', 'false', 'NULL', 'abs'}
         
+        # v4.2.0: 数値リテラルを除外
         variables = [v for v in variables if v not in keywords]
+        variables = [v for v in variables if not v.isdigit()]
         
         return list(set(variables))  # 重複を除去
     

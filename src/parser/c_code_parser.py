@@ -12,7 +12,7 @@ from typing import Optional, Dict, List
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger, read_file
-from src.data_structures import ParsedData, FunctionInfo, FunctionSignature
+from src.data_structures import ParsedData, FunctionInfo, FunctionSignature, LocalVariableInfo
 from src.parser.preprocessor import Preprocessor
 from src.parser.ast_builder import ASTBuilder
 from src.parser.condition_extractor import ConditionExtractor
@@ -178,6 +178,13 @@ class CCodeParser:
             function_signatures = self._extract_function_signatures(ast, code)
             self.logger.info(f"{len(function_signatures)}個の関数シグネチャを抽出しました")
             
+            # 11.8. v4.2.0: ローカル変数を抽出
+            local_variables = self._extract_local_variables(
+                code, 
+                target_function or (function_info.name if function_info else "")
+            )
+            self.logger.info(f"{len(local_variables)}個のローカル変数を抽出しました")
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -194,7 +201,8 @@ class CCodeParser:
                 macros=macros,  # v2.4.2: 追加
                 macro_definitions=macro_definitions,  # v2.4.2: 追加
                 struct_definitions=struct_definitions,  # v2.8.0: 追加
-                function_signatures=function_signatures  # v4.0: 追加
+                function_signatures=function_signatures,  # v4.0: 追加
+                local_variables=local_variables  # v4.2.0: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
@@ -570,6 +578,111 @@ class CCodeParser:
             )
         
         return signatures
+    
+    def _extract_local_variables(self, source_code: str, function_name: str) -> Dict[str, LocalVariableInfo]:
+        """
+        ローカル変数を抽出 (v4.2.0で追加)
+        
+        Args:
+            source_code: ソースコード
+            function_name: 対象関数名
+        
+        Returns:
+            Dict[変数名, LocalVariableInfo]
+        """
+        local_vars = {}
+        
+        if not function_name:
+            return local_vars
+        
+        # 関数本体を抽出
+        # パターン: static? 戻り値型 関数名(パラメータ) { ... }
+        func_pattern = rf'(?:static\s+)?\w+(?:\s*\*)?[^{{;]*?\b{re.escape(function_name)}\s*\([^)]*\)\s*\{{'
+        
+        match = re.search(func_pattern, source_code, re.MULTILINE)
+        if not match:
+            return local_vars
+        
+        start = match.end()
+        
+        # 対応する閉じ括弧を探す
+        brace_count = 1
+        end = start
+        for i in range(start, len(source_code)):
+            if source_code[i] == '{':
+                brace_count += 1
+            elif source_code[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end = i
+                    break
+        
+        function_body = source_code[start:end]
+        
+        # ローカル変数宣言パターン
+        # 型名 変数名 [= 初期値];
+        # 例: Utx10 Utx73;
+        #     Utx189 Utx125 = {0};
+        #     uint8_t Utv17 = UCHAR_MAX;
+        #     bool Utx68 = false;
+        local_var_pattern = r'(?:^|\n|\{)\s*(\w+(?:\s+\w+)?)\s+(\w+)\s*(?:=\s*([^;]+?))?\s*;'
+        
+        # C言語キーワードを除外するためのセット
+        keywords = {'if', 'else', 'for', 'while', 'switch', 'case', 'default', 
+                   'return', 'break', 'continue', 'goto', 'sizeof', 'typedef',
+                   'extern', 'static', 'const', 'volatile', 'register'}
+        
+        # 基本型セット
+        basic_types = {'int', 'char', 'short', 'long', 'float', 'double', 'void',
+                      'unsigned', 'signed', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+                      'int8_t', 'int16_t', 'int32_t', 'int64_t', 'bool', 'size_t'}
+        
+        lines = function_body.split('\n')
+        for line_no, line in enumerate(lines, 1):
+            # コメントを除去
+            line_clean = re.sub(r'//.*$', '', line)
+            line_clean = re.sub(r'/\*.*?\*/', '', line_clean)
+            
+            # for文の初期化部分は除外
+            if re.match(r'\s*for\s*\(', line_clean):
+                continue
+            
+            # 関数呼び出しは除外
+            if re.search(r'\w+\s*\([^)]*\)\s*;', line_clean) and '=' not in line_clean:
+                continue
+            
+            # 型名+変数名のパターンを検索
+            for match in re.finditer(local_var_pattern, line_clean):
+                type_name = match.group(1).strip()
+                var_name = match.group(2).strip()
+                init_value = match.group(3).strip() if match.group(3) else ""
+                
+                # キーワードチェック
+                if type_name.lower() in keywords or var_name.lower() in keywords:
+                    continue
+                
+                # 型名が有効かチェック（アルファベットで始まる）
+                if not re.match(r'^[A-Za-z_]', type_name):
+                    continue
+                
+                # 変数名が有効かチェック
+                if not re.match(r'^[A-Za-z_]\w*$', var_name):
+                    continue
+                
+                # 制御構造キーワードを除外
+                if var_name in keywords:
+                    continue
+                
+                local_vars[var_name] = LocalVariableInfo(
+                    name=var_name,
+                    var_type=type_name,
+                    scope=function_name,
+                    line_number=line_no,
+                    is_initialized=bool(init_value),
+                    initial_value=init_value
+                )
+        
+        return local_vars
 
 
 if __name__ == "__main__":

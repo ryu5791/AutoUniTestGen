@@ -4,12 +4,13 @@ TestFunctionGeneratorモジュール
 Unityテスト関数を生成
 
 v3.3.0: ValueResolverを使用してTODOコメントを解消
+v4.2.0: ローカル変数/構造体メンバー/数値リテラル対応
 """
 
 import sys
 import os
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -211,6 +212,8 @@ class TestFunctionGenerator:
         """
         変数初期化コードを生成
         
+        v4.2.0: ローカル変数、構造体メンバー、数値リテラル対応
+        
         Args:
             test_case: テストケース
             parsed_data: 解析済みデータ
@@ -276,47 +279,154 @@ class TestFunctionGenerator:
         # 条件タイプに応じて初期化コードを生成
         if matching_condition.type == ConditionType.SIMPLE_IF:
             init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
+            init = self._process_init_code(init, parsed_data, lines)
             if init:
-                # セミコロンの前のコメントを考慮してチェック
-                # "変数 = 値;  // コメント" の形式を想定
-                code_part = init.split('//')[0].rstrip()
-                if not code_part.endswith(';'):
-                    lines.append(f"    {init};")
-                else:
-                    lines.append(f"    {init}")
+                self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.OR_CONDITION:
             init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                # セミコロンの前のコメントを考慮してチェック
-                code_part = init.split('//')[0].rstrip()
-                if not code_part.endswith(';'):
-                    lines.append(f"    {init};")
-                else:
-                    lines.append(f"    {init}")
+                init = self._process_init_code(init, parsed_data, lines)
+                if init:
+                    self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.AND_CONDITION:
             init_list = self._generate_and_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                # セミコロンの前のコメントを考慮してチェック
-                code_part = init.split('//')[0].rstrip()
-                if not code_part.endswith(';'):
-                    lines.append(f"    {init};")
-                else:
-                    lines.append(f"    {init}")
+                init = self._process_init_code(init, parsed_data, lines)
+                if init:
+                    self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.SWITCH:
             init = self._generate_switch_init(matching_condition, test_case, parsed_data)
+            init = self._process_init_code(init, parsed_data, lines)
             if init:
-                # セミコロンの前のコメントを考慮してチェック
-                code_part = init.split('//')[0].rstrip()
-                if not code_part.endswith(';'):
-                    lines.append(f"    {init};")
-                else:
-                    lines.append(f"    {init}")
+                self._append_init_line(init, lines)
         
         lines.append("")
         return '\n'.join(lines)
+    
+    def _process_init_code(self, init: Optional[str], parsed_data: ParsedData, lines: List[str]) -> Optional[str]:
+        """
+        初期化コードを処理（ローカル変数・構造体メンバー・数値リテラル対応）
+        
+        v4.2.0追加
+        
+        Args:
+            init: 生成された初期化コード
+            parsed_data: 解析済みデータ
+            lines: 出力行リスト（ローカル変数宣言追加用）
+        
+        Returns:
+            処理後の初期化コード（またはNone）
+        """
+        if not init:
+            return None
+        
+        # コメントの場合はそのまま返す
+        if init.strip().startswith('//'):
+            return init
+        
+        # "変数 = 値" 形式から変数名を抽出
+        match = re.match(r'([\w\.]+)\s*=\s*(.+)', init)
+        if not match:
+            return init
+        
+        var_part = match.group(1).strip()
+        value_part = match.group(2).strip()
+        
+        # 問題3: 数値リテラルへの代入を防止
+        if var_part.isdigit() or (var_part.startswith('-') and var_part[1:].isdigit()):
+            return f"// TODO: 数値リテラル {var_part} は変数ではないため初期化できません"
+        
+        # 問題2: 構造体メンバーへの代入（完全パス保持）
+        # 構造体メンバーアクセス（.を含む）の場合は完全パスを維持
+        if '.' in var_part:
+            # 変数ルート名を抽出（例: Utx73.Utm13 -> Utx73）
+            root_var = var_part.split('.')[0]
+            
+            # 問題1: ローカル変数チェック
+            if self._is_local_variable(root_var, parsed_data):
+                local_var_info = self._get_local_variable_info(root_var, parsed_data)
+                if local_var_info:
+                    # ローカル変数宣言を追加（重複チェック）
+                    decl_line = f"    {local_var_info.var_type} {root_var} = {{0}};  // ローカル変数"
+                    if decl_line not in lines:
+                        lines.append(decl_line)
+                    return init  # 完全パスでの初期化を返す
+                else:
+                    # 型情報が見つからない場合はTODOコメント
+                    return f"// TODO: {root_var} は対象関数内のローカル変数です（型情報なし）"
+            else:
+                # グローバル変数の場合はそのまま返す
+                return init
+        
+        # 問題1: 単独の変数がローカル変数かチェック
+        if self._is_local_variable(var_part, parsed_data):
+            local_var_info = self._get_local_variable_info(var_part, parsed_data)
+            if local_var_info:
+                # ローカル変数宣言を追加（重複チェック）
+                decl_line = f"    {local_var_info.var_type} {var_part} = {{0}};  // ローカル変数"
+                if decl_line not in lines:
+                    lines.append(decl_line)
+                return init  # 元の初期化コードを返す
+            else:
+                # 型情報が見つからない場合はTODOコメント
+                return f"// TODO: {var_part} は対象関数内のローカル変数です（型情報なし）"
+        
+        return init
+    
+    def _append_init_line(self, init: str, lines: List[str]) -> None:
+        """
+        初期化行をリストに追加（セミコロン処理）
+        
+        Args:
+            init: 初期化コード
+            lines: 出力行リスト
+        """
+        # セミコロンの前のコメントを考慮してチェック
+        code_part = init.split('//')[0].rstrip()
+        if code_part and not code_part.endswith(';'):
+            lines.append(f"    {init};")
+        else:
+            lines.append(f"    {init}")
+    
+    def _is_local_variable(self, var_name: str, parsed_data: ParsedData) -> bool:
+        """
+        変数がローカル変数かどうかを判定
+        
+        v4.2.0追加
+        
+        Args:
+            var_name: 変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            ローカル変数の場合True
+        """
+        # local_variables属性が存在するかチェック
+        if not hasattr(parsed_data, 'local_variables') or not parsed_data.local_variables:
+            return False
+        
+        return var_name in parsed_data.local_variables
+    
+    def _get_local_variable_info(self, var_name: str, parsed_data: ParsedData):
+        """
+        ローカル変数の情報を取得
+        
+        v4.2.0追加
+        
+        Args:
+            var_name: 変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            LocalVariableInfo または None
+        """
+        if not hasattr(parsed_data, 'local_variables') or not parsed_data.local_variables:
+            return None
+        
+        return parsed_data.local_variables.get(var_name)
     
     def _generate_simple_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> Optional[str]:
         """

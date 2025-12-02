@@ -286,6 +286,27 @@ class VariableDeclInfo:
 
 
 @dataclass
+class LocalVariableInfo:
+    """ローカル変数情報 (v4.2.0で追加)"""
+    name: str
+    var_type: str
+    scope: str  # 関数名やブロック識別
+    line_number: int = 0
+    is_initialized: bool = False
+    initial_value: str = ""
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'var_type': self.var_type,
+            'scope': self.scope,
+            'line_number': self.line_number,
+            'is_initialized': self.is_initialized,
+            'initial_value': self.initial_value
+        }
+
+
+@dataclass
 class StructMember:
     """構造体メンバー情報 (v2.8.0で追加)"""
     name: str                              # メンバー名（例: "status"）
@@ -388,6 +409,7 @@ class ParsedData:
     macro_definitions: List[str] = field(default_factory=list)  # v2.4.2: マクロ定義文字列のリスト
     struct_definitions: List[StructDefinition] = field(default_factory=list)  # v2.8.0: 構造体定義
     function_signatures: Dict[str, 'FunctionSignature'] = field(default_factory=dict)  # v4.0: 関数シグネチャ
+    local_variables: Dict[str, 'LocalVariableInfo'] = field(default_factory=dict)  # v4.2.0: ローカル変数情報
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """
