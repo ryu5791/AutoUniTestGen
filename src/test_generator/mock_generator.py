@@ -1,13 +1,14 @@
 """
-MockGeneratorモジュール（v4.0）
+MockGeneratorモジュール（v4.1.2）
 
 モック/スタブ関数を生成
 v4.0: 元の関数と同じシグネチャでモックを生成（リンカ互換）
+v4.1.2: 構造体型変数の初期化をmemset対応
 """
 
 import sys
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Set
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -16,12 +17,35 @@ from src.data_structures import ParsedData, MockFunction, FunctionSignature
 
 
 class MockGenerator:
-    """モックジェネレータ（v4.0: シグネチャ一致対応）"""
+    """モックジェネレータ（v4.1.2: 構造体型初期化対応）"""
+    
+    # プリミティブ型のセット（v4.1.2追加）
+    PRIMITIVE_TYPES: Set[str] = {
+        # 標準整数型
+        'int', 'short', 'long', 'char',
+        'signed', 'unsigned',
+        'signed int', 'unsigned int',
+        'signed short', 'unsigned short',
+        'signed long', 'unsigned long',
+        'signed char', 'unsigned char',
+        'long long', 'unsigned long long',
+        # 固定幅整数型
+        'int8_t', 'int16_t', 'int32_t', 'int64_t',
+        'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+        # ブール型
+        'bool', '_Bool',
+        # 浮動小数点型
+        'float', 'double', 'long double',
+        # その他
+        'size_t', 'ptrdiff_t', 'intptr_t', 'uintptr_t',
+        'void',
+    }
     
     def __init__(self):
         """初期化"""
         self.logger = setup_logger(__name__)
         self.mock_functions: List[MockFunction] = []
+        self._needs_string_h = False  # memset使用フラグ（v4.1.2追加）
     
     def generate_mocks(self, parsed_data: ParsedData) -> str:
         """
@@ -39,11 +63,20 @@ class MockGenerator:
         
         # 外部関数からモック関数リストを作成
         self.mock_functions = []
+        self._needs_string_h = False
+        
         for func_name in parsed_data.external_functions:
             # シグネチャ情報を取得（なければデフォルト）
             signature = parsed_data.function_signatures.get(func_name)
             mock_func = self._create_mock_function(func_name, signature)
             self.mock_functions.append(mock_func)
+            
+            # 構造体型があるかチェック（v4.1.2）
+            if not self._is_primitive_type(mock_func.return_type) and mock_func.return_type != 'void':
+                self._needs_string_h = True
+            for param in mock_func.parameters:
+                if not self._is_primitive_type(param['type']):
+                    self._needs_string_h = True
         
         # コードを生成
         code_parts = []
@@ -60,6 +93,73 @@ class MockGenerator:
         self.logger.info(f"v4.0: モック/スタブコードの生成が完了: {len(self.mock_functions)}個")
         
         return '\n\n'.join(code_parts)
+    
+    def needs_string_h(self) -> bool:
+        """
+        memset使用のためstring.hが必要かどうか（v4.1.2追加）
+        
+        Returns:
+            string.hが必要ならTrue
+        """
+        return self._needs_string_h
+    
+    def _is_primitive_type(self, type_name: str) -> bool:
+        """
+        プリミティブ型かどうかを判定（v4.1.2追加）
+        
+        Args:
+            type_name: 型名
+        
+        Returns:
+            プリミティブ型ならTrue
+        """
+        if not type_name:
+            return True
+        
+        # ポインタ型はプリミティブとして扱う（NULLで初期化可能）
+        if '*' in type_name:
+            return True
+        
+        # const, volatileなどの修飾子を除去
+        cleaned = type_name.replace('const', '').replace('volatile', '').strip()
+        
+        # プリミティブ型セットに含まれるかチェック
+        return cleaned in self.PRIMITIVE_TYPES
+    
+    def _is_pointer_type(self, type_name: str) -> bool:
+        """
+        ポインタ型かどうかを判定（v4.1.2追加）
+        
+        Args:
+            type_name: 型名
+        
+        Returns:
+            ポインタ型ならTrue
+        """
+        return '*' in type_name if type_name else False
+    
+    def _get_init_code(self, var_name: str, type_name: str) -> str:
+        """
+        変数の初期化コードを取得（v4.1.2追加）
+        
+        Args:
+            var_name: 変数名
+            type_name: 型名
+        
+        Returns:
+            初期化コード（末尾のセミコロン含む）
+        """
+        if type_name == 'void':
+            return ""
+        
+        if self._is_pointer_type(type_name):
+            return f"{var_name} = NULL;"
+        elif self._is_primitive_type(type_name):
+            return f"{var_name} = 0;"
+        else:
+            # 構造体/union型 - memsetを使用
+            self._needs_string_h = True
+            return f"memset(&{var_name}, 0, sizeof({var_name}));"
     
     def _create_mock_function(self, func_name: str, 
                               signature: Optional[FunctionSignature] = None) -> MockFunction:
@@ -178,7 +278,10 @@ class MockGenerator:
     
     def generate_reset_function(self) -> str:
         """
-        モックをリセットする関数を生成（v4.0: パラメータ変数も初期化）
+        モックをリセットする関数を生成
+        
+        v4.0: パラメータ変数も初期化
+        v4.1.2: 構造体型はmemsetで初期化
         
         Returns:
             リセット関数のコード
@@ -193,13 +296,22 @@ class MockGenerator:
         for mock_func in self.mock_functions:
             # 戻り値変数（void型でない場合のみ）
             if mock_func.return_type != "void":
-                lines.append(f"    {mock_func.return_variable} = 0;")
+                init_code = self._get_init_code(
+                    mock_func.return_variable, 
+                    mock_func.return_type
+                )
+                if init_code:
+                    lines.append(f"    {init_code}")
+            
+            # 呼び出し回数カウンタ（常にint型）
             lines.append(f"    {mock_func.call_count_variable} = 0;")
             
-            # パラメータキャプチャ変数もリセット（v4.0新規）
+            # パラメータキャプチャ変数もリセット（v4.0新規、v4.1.2で型対応）
             for param in mock_func.parameters:
                 param_var = f"mock_{mock_func.name}_param_{param['name']}"
-                lines.append(f"    {param_var} = 0;")
+                init_code = self._get_init_code(param_var, param['type'])
+                if init_code:
+                    lines.append(f"    {init_code}")
         
         lines.append("}")
         
@@ -275,43 +387,49 @@ class MockGenerator:
 if __name__ == "__main__":
     # MockGeneratorのテスト
     print("=" * 70)
-    print("MockGenerator v4.0 のテスト")
+    print("MockGenerator v4.1.2 のテスト（構造体型初期化対応）")
     print("=" * 70)
     print()
     
     from src.data_structures import ParsedData, FunctionSignature
     
-    # テスト用のParseDataを作成（v4.0: シグネチャ情報付き）
+    # テスト用のParseDataを作成（v4.1.2: 構造体型を含む）
     parsed_data = ParsedData(
         file_name="test.c",
         function_name="test_func",
-        external_functions=['Utf8', 'Utf9', 'f4', 'mx27']
+        external_functions=['Utf8', 'Utf9', 'Utx167', 'Utx69']
     )
     
-    # シグネチャ情報を設定
+    # シグネチャ情報を設定（構造体型を含む）
     parsed_data.function_signatures = {
         'Utf8': FunctionSignature(
             name='Utf8',
-            return_type='uint8_t',
+            return_type='uint8_t',  # プリミティブ型
             parameters=[]
         ),
         'Utf9': FunctionSignature(
             name='Utf9',
-            return_type='uint16_t',
+            return_type='uint16_t',  # プリミティブ型
             parameters=[
                 {'type': 'uint8_t', 'name': 'param1'},
                 {'type': 'int', 'name': 'param2'}
             ]
         ),
-        'f4': FunctionSignature(
-            name='f4',
-            return_type='uint16_t',
-            parameters=[]
+        'Utx167': FunctionSignature(
+            name='Utx167',
+            return_type='Utx10',  # 構造体/union型
+            parameters=[
+                {'type': 'Utx10', 'name': 'Utx123'}  # 構造体型パラメータ
+            ]
         ),
-        'mx27': FunctionSignature(
-            name='mx27',
-            return_type='mx26',
-            parameters=[]
+        'Utx69': FunctionSignature(
+            name='Utx69',
+            return_type='Utx10',  # 構造体/union型
+            parameters=[
+                {'type': 'Utx10', 'name': 'Utx123'},  # 構造体型
+                {'type': 'Utx168', 'name': 'Utx128'},  # 構造体型
+                {'type': 'uint8_t*', 'name': 'ptr'}  # ポインタ型
+            ]
         )
     }
     
@@ -323,6 +441,10 @@ if __name__ == "__main__":
     print("=" * 70)
     print(mock_code)
     print("=" * 70)
+    print()
+    
+    # memset使用確認
+    print(f"string.h が必要: {generator.needs_string_h()}")
     print()
     
     # プロトタイプ宣言
@@ -339,18 +461,11 @@ if __name__ == "__main__":
     print("=" * 70)
     print()
     
-    # アサートコード
-    print("アサートコード:")
+    # リセット関数の確認
+    print("リセット関数（v4.1.2: 構造体型はmemset使用）:")
     print("=" * 70)
-    print(generator.generate_assert_call_counts())
-    print("=" * 70)
-    print()
-    
-    # パラメータアサートコード（v4.0新規）
-    print("パラメータアサートコード（v4.0新規）:")
-    print("=" * 70)
-    print(generator.generate_param_assertions())
+    print(generator.generate_reset_function())
     print("=" * 70)
     print()
     
-    print("✓ MockGenerator v4.0 が正常に動作しました")
+    print("✓ MockGenerator v4.1.2 が正常に動作しました")
