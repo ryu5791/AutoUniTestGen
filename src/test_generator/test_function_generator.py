@@ -65,17 +65,14 @@ class TestFunctionGenerator:
         # 対象関数呼び出し
         lines.append(f"    // 対象関数を実行")
         
+        # v4.1.3: パラメータを構築（戻り値の有無に関係なく）
+        param_str = self._build_function_call_params(parsed_data)
+        
         # 戻り値がある場合は result 変数に代入
         if parsed_data.function_info and parsed_data.function_info.return_type != 'void':
-            # パラメータを構築
-            params = []
-            if parsed_data.function_info.parameters:
-                for param in parsed_data.function_info.parameters:
-                    params.append(param.get('name', ''))
-            param_str = ', '.join(params) if params else ''
             lines.append(f"    result = {parsed_data.function_name}({param_str});")
         else:
-            lines.append(f"    {parsed_data.function_name}();")
+            lines.append(f"    {parsed_data.function_name}({param_str});")
         
         lines.append("")
         
@@ -93,6 +90,27 @@ class TestFunctionGenerator:
         lines.append("}")
         
         return '\n'.join(lines)
+    
+    def _build_function_call_params(self, parsed_data: ParsedData) -> str:
+        """
+        対象関数呼び出し時のパラメータ文字列を構築（v4.1.3追加）
+        
+        Args:
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            パラメータ文字列（例: "Utv1, Utv2" または ""）
+        """
+        if not parsed_data.function_info or not parsed_data.function_info.parameters:
+            return ""
+        
+        params = []
+        for param in parsed_data.function_info.parameters:
+            param_name = param.get('name', '')
+            if param_name:
+                params.append(param_name)
+        
+        return ', '.join(params)
     
     def _generate_test_name(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """
@@ -964,13 +982,13 @@ class TestFunctionGenerator:
 if __name__ == "__main__":
     # TestFunctionGeneratorのテスト
     print("=" * 70)
-    print("TestFunctionGenerator のテスト")
+    print("TestFunctionGenerator v4.1.3 のテスト（パラメータ対応）")
     print("=" * 70)
     print()
     
-    from src.data_structures import TestCase, ParsedData, Condition, ConditionType
+    from src.data_structures import TestCase, ParsedData, Condition, ConditionType, FunctionInfo
     
-    # テスト用データ
+    # テスト用データ（パラメータなし関数）
     parsed_data = ParsedData(
         file_name="test.c",
         function_name="test_func",
@@ -1017,16 +1035,113 @@ if __name__ == "__main__":
     # テスト関数を生成
     generator = TestFunctionGenerator()
     
-    print("テスト1: 単純条件のテスト関数")
+    print("テスト1: 単純条件のテスト関数（パラメータなし）")
     print("=" * 70)
     print(generator.generate_test_function(test_case1, parsed_data))
     print()
     print()
     
-    print("テスト2: OR条件のテスト関数")
+    print("テスト2: OR条件のテスト関数（パラメータなし）")
     print("=" * 70)
     print(generator.generate_test_function(test_case2, parsed_data))
     print()
+    print()
     
-    print("✓ TestFunctionGeneratorが正常に動作しました")
+    # v4.1.3: パラメータあり関数のテスト
+    print("=" * 70)
+    print("v4.1.3: パラメータあり関数のテスト")
+    print("=" * 70)
+    print()
+    
+    # パラメータあり関数のテストデータ
+    parsed_data_with_params = ParsedData(
+        file_name="test.c",
+        function_name="Utf1",
+        external_functions=['Utf7', 'Utf8'],
+        global_variables=['Utx130', 'Utx116']
+    )
+    
+    # 関数情報を設定（パラメータあり）
+    parsed_data_with_params.function_info = FunctionInfo(
+        name="Utf1",
+        return_type="void",  # 戻り値なし
+        parameters=[
+            {'type': 'uint8_t', 'name': 'Utv1'}
+        ]
+    )
+    
+    # 条件を追加
+    parsed_data_with_params.conditions.append(
+        Condition(
+            line=110,
+            type=ConditionType.SIMPLE_IF,
+            expression="(Utx130.Utm1.Utm4 != 0)"
+        )
+    )
+    
+    test_case_with_params = TestCase(
+        no=1,
+        truth="T",
+        condition="if (Utx130.Utm1.Utm4 != 0)",
+        expected="条件が真の処理を実行"
+    )
+    
+    print("テスト3: パラメータあり＆戻り値なし関数のテスト")
+    print("=" * 70)
+    result = generator.generate_test_function(test_case_with_params, parsed_data_with_params)
+    print(result)
+    
+    # Utf1(Utv1) が生成されているか確認
+    if "Utf1(Utv1)" in result:
+        print()
+        print("✅ パラメータが正しく渡されています: Utf1(Utv1)")
+    elif "Utf1()" in result:
+        print()
+        print("❌ パラメータが渡されていません: Utf1()")
+    print()
+    
+    # 戻り値ありの場合のテスト
+    parsed_data_with_return = ParsedData(
+        file_name="test.c",
+        function_name="Utf2",
+        external_functions=['Utf7'],
+        global_variables=['Utx130']
+    )
+    
+    parsed_data_with_return.function_info = FunctionInfo(
+        name="Utf2",
+        return_type="uint16_t",  # 戻り値あり
+        parameters=[
+            {'type': 'uint8_t', 'name': 'param1'},
+            {'type': 'int', 'name': 'param2'}
+        ]
+    )
+    
+    parsed_data_with_return.conditions.append(
+        Condition(
+            line=110,
+            type=ConditionType.SIMPLE_IF,
+            expression="(Utx130 > 0)"
+        )
+    )
+    
+    test_case_with_return = TestCase(
+        no=1,
+        truth="T",
+        condition="if (Utx130 > 0)",
+        expected="条件が真"
+    )
+    
+    print("テスト4: パラメータあり＆戻り値あり関数のテスト")
+    print("=" * 70)
+    result2 = generator.generate_test_function(test_case_with_return, parsed_data_with_return)
+    print(result2)
+    
+    # result = Utf2(param1, param2) が生成されているか確認
+    if "Utf2(param1, param2)" in result2:
+        print()
+        print("✅ パラメータが正しく渡されています: result = Utf2(param1, param2)")
+    print()
+    
+    print("✓ TestFunctionGenerator v4.1.3 が正常に動作しました")
 
