@@ -231,12 +231,13 @@ class ValueResolver:
         
         return self.parsed_data.macros.get(macro_name)
     
-    def resolve_different_value(self, value: str) -> Tuple[str, str]:
+    def resolve_different_value(self, value: str, max_value: int = None) -> Tuple[str, str]:
         """
         指定された値と異なる値を解決
         
         Args:
             value: 比較対象の値（数値、識別子、enum定数）
+            max_value: 最大値制約（ビットフィールド等の場合に指定）(v4.2.1追加)
         
         Returns:
             (異なる値, コメント) のタプル
@@ -248,6 +249,8 @@ class ValueResolver:
             ("Utm25", "Utm24と異なるenum値")
             >>> resolver.resolve_different_value("UtD1")
             ("256", "UtD1(=255)と異なる値")
+            >>> resolver.resolve_different_value("3", max_value=3)  # 2ビットフィールド
+            ("2", "3と異なる値（最大値3考慮）")
         """
         if not value:
             return (self.FALLBACK_VALUE_SHORT, "不明な値と異なる値")
@@ -256,7 +259,7 @@ class ValueResolver:
         
         # 1. 数値の場合
         if self.is_numeric(value):
-            result = self._resolve_numeric_different(value)
+            result = self._resolve_numeric_different(value, max_value)
             return result
         
         # 2. enum定数の場合
@@ -266,19 +269,22 @@ class ValueResolver:
         
         # 3. マクロ定数の場合
         if self.is_macro_constant(value):
-            result = self._resolve_macro_different(value)
+            result = self._resolve_macro_different(value, max_value)
             return result
         
         # 4. 不明な識別子の場合（フォールバック）
         self.logger.debug(f"Unknown identifier: {value}, using fallback")
         return (self.FALLBACK_VALUE_SHORT, f"{value}と異なる値（不明な識別子）")
     
-    def _resolve_numeric_different(self, value: str) -> Tuple[str, str]:
+    def _resolve_numeric_different(self, value: str, max_value: int = None) -> Tuple[str, str]:
         """
         数値と異なる値を解決
         
+        v4.2.1: max_value制約を追加（ビットフィールド対応）
+        
         Args:
             value: 数値文字列
+            max_value: 最大値制約（ビットフィールド等の場合）
         
         Returns:
             (異なる値, コメント) のタプル
@@ -287,6 +293,24 @@ class ValueResolver:
         if num is None:
             return (self.FALLBACK_VALUE_SHORT, f"{value}と異なる値")
         
+        # max_value制約がある場合（ビットフィールド等）
+        if max_value is not None:
+            if num >= max_value:
+                # 最大値以上の場合は-1
+                different = num - 1 if num > 0 else 0
+                return (str(different), f"{value}と異なる値（最大値{max_value}考慮）")
+            elif num == 0:
+                # 0の場合は+1（ただし最大値を超えない）
+                different = min(1, max_value)
+                return (str(different), f"0と異なる値（最大値{max_value}考慮）")
+            else:
+                # 通常は+1、ただし最大値を超えないように
+                different = num + 1
+                if different > max_value:
+                    different = num - 1
+                return (str(different), f"{value}と異なる値（最大値{max_value}考慮）")
+        
+        # max_value制約がない場合（従来の動作）
         # 0の場合は1を返す
         if num == 0:
             return ("1", "0と異なる値")
@@ -333,12 +357,15 @@ class ValueResolver:
         # 同じenumに他の値がない場合（単一値enum）
         return ("0", f"{value}と異なる値（単一値enum）")
     
-    def _resolve_macro_different(self, value: str) -> Tuple[str, str]:
+    def _resolve_macro_different(self, value: str, max_value: int = None) -> Tuple[str, str]:
         """
         マクロ定数と異なる値を解決
         
+        v4.2.1: max_value制約を追加（ビットフィールド対応）
+        
         Args:
             value: マクロ名
+            max_value: 最大値制約（ビットフィールド等の場合）
         
         Returns:
             (異なる値, コメント) のタプル
@@ -351,8 +378,20 @@ class ValueResolver:
         if self.is_numeric(macro_value):
             num = self.parse_numeric(macro_value)
             if num is not None:
-                different = num + 1 if num >= 0 else num - 1
-                return (str(different), f"{value}(={macro_value})と異なる値")
+                # max_value制約がある場合
+                if max_value is not None:
+                    if num >= max_value:
+                        different = num - 1 if num > 0 else 0
+                    elif num == 0:
+                        different = min(1, max_value)
+                    else:
+                        different = num + 1
+                        if different > max_value:
+                            different = num - 1
+                    return (str(different), f"{value}(={macro_value})と異なる値（最大値{max_value}考慮）")
+                else:
+                    different = num + 1 if num >= 0 else num - 1
+                    return (str(different), f"{value}(={macro_value})と異なる値")
         
         # マクロの値が別のマクロや識別子の場合
         # 再帰的に解決を試みる（深さ制限付き）
@@ -362,8 +401,20 @@ class ValueResolver:
             if inner_value and self.is_numeric(inner_value):
                 num = self.parse_numeric(inner_value)
                 if num is not None:
-                    different = num + 1 if num >= 0 else num - 1
-                    return (str(different), f"{value}(={macro_value}={inner_value})と異なる値")
+                    # max_value制約がある場合
+                    if max_value is not None:
+                        if num >= max_value:
+                            different = num - 1 if num > 0 else 0
+                        elif num == 0:
+                            different = min(1, max_value)
+                        else:
+                            different = num + 1
+                            if different > max_value:
+                                different = num - 1
+                        return (str(different), f"{value}(={macro_value}={inner_value})と異なる値（最大値{max_value}考慮）")
+                    else:
+                        different = num + 1 if num >= 0 else num - 1
+                        return (str(different), f"{value}(={macro_value}={inner_value})と異なる値")
         
         return (self.FALLBACK_VALUE_SHORT, f"{value}と異なる値")
     
@@ -492,6 +543,60 @@ class ValueResolver:
         
         # 3. 不明な識別子の場合
         return (self.FALLBACK_VALUE_SHORT, f"{value}より大きい値（境界値）")
+    
+    def get_bitfield_max_value(self, var_path: str) -> int:
+        """
+        構造体メンバーパスからビットフィールドの最大値を取得 (v4.2.1追加)
+        
+        Args:
+            var_path: 変数パス（例: "Utx116.Utm6.Utm7" または "Utm7"）
+        
+        Returns:
+            最大値（ビットフィールドでない場合はNone）
+        """
+        if not self.parsed_data or not hasattr(self.parsed_data, 'bitfields'):
+            return None
+        
+        # メンバー名を抽出（パスの最後の部分）
+        member_name = var_path.split('.')[-1] if '.' in var_path else var_path
+        
+        # bitfieldsディクショナリから検索
+        for key, bitfield_info in self.parsed_data.bitfields.items():
+            # メンバー名でマッチ
+            if bitfield_info.member_name == member_name:
+                return bitfield_info.get_max_value()
+            # キー自体がメンバー名の場合
+            if key == member_name:
+                return bitfield_info.get_max_value()
+        
+        return None
+    
+    def get_bitfield_info(self, var_path: str):
+        """
+        構造体メンバーパスからビットフィールド情報を取得 (v4.2.1追加)
+        
+        Args:
+            var_path: 変数パス（例: "Utx116.Utm6.Utm7" または "Utm7"）
+        
+        Returns:
+            BitFieldInfoオブジェクト（ビットフィールドでない場合はNone）
+        """
+        if not self.parsed_data or not hasattr(self.parsed_data, 'bitfields'):
+            return None
+        
+        # メンバー名を抽出（パスの最後の部分）
+        member_name = var_path.split('.')[-1] if '.' in var_path else var_path
+        
+        # bitfieldsディクショナリから検索
+        for key, bitfield_info in self.parsed_data.bitfields.items():
+            # メンバー名でマッチ
+            if bitfield_info.member_name == member_name:
+                return bitfield_info
+            # キー自体がメンバー名の場合
+            if key == member_name:
+                return bitfield_info
+        
+        return None
 
 
 # メインブロック（テスト用）

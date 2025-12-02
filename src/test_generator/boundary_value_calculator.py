@@ -270,19 +270,23 @@ class BoundaryValueCalculator:
                 # 識別子同士の比較（例: mx63 == m47, Utx75.Utm1.Utm11 >= Utx220）
                 # v3.3.0: ValueResolverを使用してTODOを解消
                 # v4.2.0: >=, <=, >, < の演算子にも対応
+                # v4.2.1: ビットフィールド制約を考慮
                 value_resolver = ValueResolver(parsed_data)
+                
+                # v4.2.1: ビットフィールドの最大値制約を取得
+                max_value = value_resolver.get_bitfield_max_value(variable)
                 
                 if operator == '==':
                     if truth == 'T':
                         return f"{variable} = {value}"
                     else:
-                        # 偽の場合は異なる値を計算
-                        different_val, comment = value_resolver.resolve_different_value(str(value))
+                        # 偽の場合は異なる値を計算（ビットフィールド制約考慮）
+                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value)
                         return f"{variable} = {different_val};  // {comment}"
                 elif operator == '!=':
                     if truth == 'T':
-                        # 真の場合は異なる値を計算
-                        different_val, comment = value_resolver.resolve_different_value(str(value))
+                        # 真の場合は異なる値を計算（ビットフィールド制約考慮）
+                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value)
                         return f"{variable} = {different_val};  // {comment}"
                     else:
                         return f"{variable} = {value}"
@@ -320,7 +324,24 @@ class BoundaryValueCalculator:
                         return f"{variable} = {value}"
             else:
                 # 数値との比較
+                # v4.2.1: ビットフィールド制約を考慮
+                value_resolver = ValueResolver(parsed_data)
+                max_value = value_resolver.get_bitfield_max_value(variable)
+                
                 test_value = self.calculate_boundary(operator, value, truth)
+                
+                # ビットフィールドの場合、最大値を超えていないかチェック
+                if max_value is not None and test_value > max_value:
+                    # 最大値を超える場合は別の値を使用
+                    if truth == 'F' and operator == '==':
+                        # False条件で==の場合、異なる値が必要
+                        test_value = max_value if value < max_value else max_value - 1 if max_value > 0 else 0
+                    elif truth == 'T' and operator == '!=':
+                        # True条件で!=の場合、異なる値が必要
+                        test_value = max_value if value < max_value else max_value - 1 if max_value > 0 else 0
+                    else:
+                        test_value = min(test_value, max_value)
+                
                 return f"{variable} = {test_value}"
         
         return None
