@@ -271,22 +271,26 @@ class BoundaryValueCalculator:
                 # v3.3.0: ValueResolverを使用してTODOを解消
                 # v4.2.0: >=, <=, >, < の演算子にも対応
                 # v4.2.1: ビットフィールド制約を考慮
+                # v4.3.0: 型情報を取得してフォールバック値を適切に選択
                 value_resolver = ValueResolver(parsed_data)
                 
                 # v4.2.1: ビットフィールドの最大値制約を取得
                 max_value = value_resolver.get_bitfield_max_value(variable)
                 
+                # v4.3.0: 変数の型情報を取得
+                var_type = value_resolver.get_variable_type(variable)
+                
                 if operator == '==':
                     if truth == 'T':
                         return f"{variable} = {value}"
                     else:
-                        # 偽の場合は異なる値を計算（ビットフィールド制約考慮）
-                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value)
+                        # 偽の場合は異なる値を計算（ビットフィールド制約・型情報考慮）
+                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value, var_type)
                         return f"{variable} = {different_val};  // {comment}"
                 elif operator == '!=':
                     if truth == 'T':
-                        # 真の場合は異なる値を計算（ビットフィールド制約考慮）
-                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value)
+                        # 真の場合は異なる値を計算（ビットフィールド制約・型情報考慮）
+                        different_val, comment = value_resolver.resolve_different_value(str(value), max_value, var_type)
                         return f"{variable} = {different_val};  // {comment}"
                     else:
                         return f"{variable} = {value}"
@@ -325,8 +329,11 @@ class BoundaryValueCalculator:
             else:
                 # 数値との比較
                 # v4.2.1: ビットフィールド制約を考慮
+                # v4.3.0: 型情報を考慮
                 value_resolver = ValueResolver(parsed_data)
                 max_value = value_resolver.get_bitfield_max_value(variable)
+                var_type = value_resolver.get_variable_type(variable)
+                type_max = value_resolver.get_max_value_for_type(var_type) if var_type else None
                 
                 test_value = self.calculate_boundary(operator, value, truth)
                 
@@ -341,6 +348,14 @@ class BoundaryValueCalculator:
                         test_value = max_value if value < max_value else max_value - 1 if max_value > 0 else 0
                     else:
                         test_value = min(test_value, max_value)
+                # v4.3.0: 型の最大値を超えていないかチェック
+                elif type_max is not None and test_value > type_max:
+                    if truth == 'F' and operator == '==':
+                        test_value = type_max if value < type_max else type_max - 1 if type_max > 0 else 0
+                    elif truth == 'T' and operator == '!=':
+                        test_value = type_max if value < type_max else type_max - 1 if type_max > 0 else 0
+                    else:
+                        test_value = min(test_value, type_max)
                 
                 return f"{variable} = {test_value}"
         

@@ -17,14 +17,48 @@ from src.utils import setup_logger
 
 class ValueResolver:
     """
-    値解決クラス (v3.3.0 新規追加)
+    値解決クラス (v4.3.0 更新)
     
     enum定数、マクロ定数、数値について「異なる値」を自動解決する
+    v4.3.0: 型別フォールバック値に対応
     """
     
     # フォールバック値（明らかに異なることを示す値）
     FALLBACK_VALUE = "0xDEADBEEF"
     FALLBACK_VALUE_SHORT = "0xDEAD"
+    
+    # v4.3.0: 型別フォールバック値テーブル
+    FALLBACK_VALUES_BY_TYPE = {
+        # 8ビット型
+        'uint8_t': '0xDE',
+        'int8_t': '0x7E',
+        'char': '0x41',           # 'A'
+        'unsigned char': '0xDE',
+        'signed char': '0x7E',
+        # 16ビット型
+        'uint16_t': '0xDEAD',
+        'int16_t': '0x7EAD',
+        'short': '0x7EAD',
+        'unsigned short': '0xDEAD',
+        # 32ビット型
+        'uint32_t': '0xDEADBEEF',
+        'int32_t': '0x7EADBEEF',
+        'int': '0x7EADBEEF',
+        'unsigned int': '0xDEADBEEF',
+        'long': '0x7EADBEEF',
+        'unsigned long': '0xDEADBEEF',
+        # 64ビット型
+        'uint64_t': '0xDEADBEEFCAFEBABE',
+        'int64_t': '0x7EADBEEFCAFEBABE',
+        'long long': '0x7EADBEEFCAFEBABE',
+        'unsigned long long': '0xDEADBEEFCAFEBABE',
+        # ブール型
+        'bool': '1',
+        '_Bool': '1',
+        # 浮動小数点型
+        'float': '3.14f',
+        'double': '3.14159',
+    }
     
     def __init__(self, parsed_data=None):
         """
@@ -231,13 +265,14 @@ class ValueResolver:
         
         return self.parsed_data.macros.get(macro_name)
     
-    def resolve_different_value(self, value: str, max_value: int = None) -> Tuple[str, str]:
+    def resolve_different_value(self, value: str, max_value: int = None, var_type: str = None) -> Tuple[str, str]:
         """
         指定された値と異なる値を解決
         
         Args:
             value: 比較対象の値（数値、識別子、enum定数）
             max_value: 最大値制約（ビットフィールド等の場合に指定）(v4.2.1追加)
+            var_type: 変数の型（フォールバック値の型を決定）(v4.3.0追加)
         
         Returns:
             (異なる値, コメント) のタプル
@@ -253,7 +288,9 @@ class ValueResolver:
             ("2", "3と異なる値（最大値3考慮）")
         """
         if not value:
-            return (self.FALLBACK_VALUE_SHORT, "不明な値と異なる値")
+            # v4.3.0: 型に応じたフォールバック値を使用
+            fallback = self.get_fallback_value_for_type(var_type) if var_type else self.FALLBACK_VALUE_SHORT
+            return (fallback, "不明な値と異なる値")
         
         value = value.strip()
         
@@ -274,7 +311,9 @@ class ValueResolver:
         
         # 4. 不明な識別子の場合（フォールバック）
         self.logger.debug(f"Unknown identifier: {value}, using fallback")
-        return (self.FALLBACK_VALUE_SHORT, f"{value}と異なる値（不明な識別子）")
+        # v4.3.0: 型に応じたフォールバック値を使用
+        fallback = self.get_fallback_value_for_type(var_type) if var_type else self.FALLBACK_VALUE_SHORT
+        return (fallback, f"{value}と異なる値（不明な識別子）")
     
     def _resolve_numeric_different(self, value: str, max_value: int = None) -> Tuple[str, str]:
         """
@@ -595,6 +634,190 @@ class ValueResolver:
             # キー自体がメンバー名の場合
             if key == member_name:
                 return bitfield_info
+        
+        return None
+    
+    def get_variable_type(self, var_path: str) -> Optional[str]:
+        """
+        変数パスから型情報を取得 (v4.3.0追加)
+        
+        Args:
+            var_path: 変数パス（例: "Utx116" または "Utx116.Utm6.Utm7" または "local_var"）
+        
+        Returns:
+            型名（見つからない場合はNone）
+        """
+        if not self.parsed_data:
+            return None
+        
+        # ルート変数名を抽出
+        root_var = var_path.split('.')[0] if '.' in var_path else var_path
+        # 配列インデックスを除去
+        root_var = re.sub(r'\[\d+\]', '', root_var)
+        
+        # 1. グローバル変数から検索
+        if hasattr(self.parsed_data, 'variables') and self.parsed_data.variables:
+            for var_info in self.parsed_data.variables:
+                if var_info.name == root_var:
+                    return var_info.var_type
+        
+        # 2. ローカル変数から検索
+        if hasattr(self.parsed_data, 'local_variables') and self.parsed_data.local_variables:
+            for var_name, var_info in self.parsed_data.local_variables.items():
+                if var_name == root_var:
+                    return var_info.var_type
+        
+        # 3. 構造体メンバーの場合、末端メンバーの型を取得
+        if '.' in var_path:
+            member_type = self._get_struct_member_type(var_path)
+            if member_type:
+                return member_type
+        
+        return None
+    
+    def _get_struct_member_type(self, var_path: str) -> Optional[str]:
+        """
+        構造体メンバーパスから末端メンバーの型を取得 (v4.3.0追加)
+        
+        Args:
+            var_path: 構造体メンバーパス（例: "Utx116.Utm6.Utm7"）
+        
+        Returns:
+            型名（見つからない場合はNone）
+        """
+        if not self.parsed_data:
+            return None
+        
+        # ビットフィールドの場合
+        bitfield_info = self.get_bitfield_info(var_path)
+        if bitfield_info:
+            return bitfield_info.base_type
+        
+        # 構造体定義から検索
+        if hasattr(self.parsed_data, 'struct_definitions') and self.parsed_data.struct_definitions:
+            parts = var_path.split('.')
+            if len(parts) < 2:
+                return None
+            
+            # 最後のメンバー名
+            member_name = parts[-1]
+            
+            # 構造体定義を検索
+            for struct_def in self.parsed_data.struct_definitions:
+                if hasattr(struct_def, 'members'):
+                    for member in struct_def.members:
+                        if hasattr(member, 'name') and member.name == member_name:
+                            if hasattr(member, 'type'):
+                                return member.type
+                            elif hasattr(member, 'member_type'):
+                                return member.member_type
+        
+        return None
+    
+    def get_fallback_value_for_type(self, var_type: str) -> str:
+        """
+        型に応じたフォールバック値を返す (v4.3.0追加)
+        
+        Args:
+            var_type: 変数の型（例: "uint8_t", "int", "Utx10"）
+        
+        Returns:
+            型に適したフォールバック値
+        """
+        if not var_type:
+            return self.FALLBACK_VALUE_SHORT
+        
+        # 型文字列をクリーンアップ
+        clean_type = var_type.replace('const ', '').replace('volatile ', '').strip()
+        
+        # ポインタ型
+        if '*' in clean_type:
+            return 'NULL'
+        
+        # 配列型（[]を含む）
+        if '[' in clean_type:
+            # 基底型を抽出
+            base_type = clean_type.split('[')[0].strip()
+            return self.get_fallback_value_for_type(base_type)
+        
+        # 型別フォールバック値テーブルから検索
+        if clean_type in self.FALLBACK_VALUES_BY_TYPE:
+            return self.FALLBACK_VALUES_BY_TYPE[clean_type]
+        
+        # unsigned/signed修飾子付きの場合
+        for base_type, value in self.FALLBACK_VALUES_BY_TYPE.items():
+            if base_type in clean_type:
+                return value
+        
+        # ビットフィールドの場合（型名からビット幅を推測）
+        # uint16_t等の場合はテーブルにあるはず
+        
+        # 構造体/共用体型の場合はデフォルト値
+        # （個別メンバーの初期化が必要なため、ここでは簡易的に0を返す）
+        if any(keyword in clean_type.lower() for keyword in ['struct', 'union']):
+            return '{0}'
+        
+        # enum型の場合
+        if 'enum' in clean_type.lower():
+            return '0'
+        
+        # typedef型の場合、基底型を探す
+        if self.parsed_data and hasattr(self.parsed_data, 'typedefs'):
+            for typedef_info in self.parsed_data.typedefs:
+                if hasattr(typedef_info, 'name') and typedef_info.name == clean_type:
+                    if hasattr(typedef_info, 'base_type'):
+                        return self.get_fallback_value_for_type(typedef_info.base_type)
+        
+        # デフォルト
+        return self.FALLBACK_VALUE_SHORT
+    
+    def get_max_value_for_type(self, var_type: str) -> Optional[int]:
+        """
+        型に応じた最大値を返す (v4.3.0追加)
+        
+        Args:
+            var_type: 変数の型（例: "uint8_t", "int16_t"）
+        
+        Returns:
+            型の最大値（不明な場合はNone）
+        """
+        if not var_type:
+            return None
+        
+        # 型文字列をクリーンアップ
+        clean_type = var_type.replace('const ', '').replace('volatile ', '').strip()
+        
+        # 符号なし整数型の最大値
+        unsigned_max = {
+            'uint8_t': 0xFF,
+            'unsigned char': 0xFF,
+            'uint16_t': 0xFFFF,
+            'unsigned short': 0xFFFF,
+            'uint32_t': 0xFFFFFFFF,
+            'unsigned int': 0xFFFFFFFF,
+            'unsigned long': 0xFFFFFFFF,
+            'uint64_t': 0xFFFFFFFFFFFFFFFF,
+            'unsigned long long': 0xFFFFFFFFFFFFFFFF,
+        }
+        
+        # 符号付き整数型の最大値
+        signed_max = {
+            'int8_t': 0x7F,
+            'signed char': 0x7F,
+            'char': 0x7F,
+            'int16_t': 0x7FFF,
+            'short': 0x7FFF,
+            'int32_t': 0x7FFFFFFF,
+            'int': 0x7FFFFFFF,
+            'long': 0x7FFFFFFF,
+            'int64_t': 0x7FFFFFFFFFFFFFFF,
+            'long long': 0x7FFFFFFFFFFFFFFF,
+        }
+        
+        if clean_type in unsigned_max:
+            return unsigned_max[clean_type]
+        if clean_type in signed_max:
+            return signed_max[clean_type]
         
         return None
 
