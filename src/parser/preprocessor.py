@@ -229,6 +229,33 @@ class Preprocessor:
         """
         return self.bitfields.copy()
     
+    def get_function_macros(self) -> Dict[str, Tuple[List[str], str]]:
+        """
+        抽出された関数マクロ情報を取得（v4.1.1追加）
+        
+        関数マクロ（引数ありマクロ）は関数のように呼び出されるが、
+        実際には関数ではないため、モック対象から除外する必要がある。
+        
+        例:
+            #define UtD30(Utx33) Utf11()
+            #define MAX(a, b) ((a) > (b) ? (a) : (b))
+        
+        Returns:
+            {マクロ名: (パラメータリスト, 本体)}
+        """
+        return self.function_macros.copy()
+    
+    def get_function_macro_names(self) -> set:
+        """
+        関数マクロ名の集合を取得（v4.1.1追加）
+        
+        外部関数の抽出時に関数マクロを除外するために使用
+        
+        Returns:
+            関数マクロ名のセット
+        """
+        return set(self.function_macros.keys())
+    
     def _collect_defines(self, code: str) -> str:
         """
         #define を収集（展開はしない）

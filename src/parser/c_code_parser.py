@@ -286,6 +286,7 @@ class CCodeParser:
         外部関数を抽出（条件式と関数本体の両方から）
         
         v4.0.1: 標準ライブラリ関数を除外
+        v4.1.1: 関数マクロ（引数ありマクロ）を除外
         
         Args:
             conditions: 条件分岐リスト
@@ -334,6 +335,15 @@ class CCodeParser:
         functions = functions - keywords
         if target_function:
             functions.discard(target_function)
+        
+        # v4.1.1: 関数マクロ（引数ありマクロ）を除外
+        # #define UtD30(Utx33) Utf11() のようなマクロは関数ではないため除外
+        function_macro_names = self.preprocessor.get_function_macro_names()
+        if function_macro_names:
+            excluded_macros = functions & function_macro_names
+            if excluded_macros:
+                self.logger.info(f"関数マクロを外部関数から除外: {sorted(excluded_macros)}")
+            functions = functions - function_macro_names
         
         # v4.0.1: 標準ライブラリ関数を除外
         if source_code:
