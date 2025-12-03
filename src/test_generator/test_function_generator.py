@@ -5,6 +5,7 @@ Unityテスト関数を生成
 
 v3.3.0: ValueResolverを使用してTODOコメントを解消
 v4.2.0: ローカル変数/構造体メンバー/数値リテラル対応
+v4.3.1: ローカル変数へのアクセスをTODOコメント化、構造体メンバーパス抽出を修正
 """
 
 import sys
@@ -311,6 +312,8 @@ class TestFunctionGenerator:
         初期化コードを処理（ローカル変数・構造体メンバー・数値リテラル対応）
         
         v4.2.0追加
+        v4.3.1修正: ローカル変数へのアクセスをTODOコメント化（テスト関数外から直接初期化不可）
+                   右辺の値にローカル変数が含まれる場合もTODOコメント化
         
         Args:
             init: 生成された初期化コード
@@ -328,7 +331,7 @@ class TestFunctionGenerator:
             return init
         
         # "変数 = 値" 形式から変数名を抽出
-        match = re.match(r'([\w\.]+)\s*=\s*(.+)', init)
+        match = re.match(r'([\w\.]+(?:\[\w+\])?(?:\.[\w]+)*)\s*=\s*(.+)', init)
         if not match:
             return init
         
@@ -339,42 +342,109 @@ class TestFunctionGenerator:
         if var_part.isdigit() or (var_part.startswith('-') and var_part[1:].isdigit()):
             return f"// TODO: 数値リテラル {var_part} は変数ではないため初期化できません"
         
-        # 問題2: 構造体メンバーへの代入（完全パス保持）
-        # 構造体メンバーアクセス（.を含む）の場合は完全パスを維持
-        if '.' in var_part:
-            # 変数ルート名を抽出（例: Utx73.Utm13 -> Utx73）
-            root_var = var_part.split('.')[0]
-            
-            # 問題1: ローカル変数チェック
-            if self._is_local_variable(root_var, parsed_data):
-                local_var_info = self._get_local_variable_info(root_var, parsed_data)
-                if local_var_info:
-                    # ローカル変数宣言を追加（重複チェック）
-                    decl_line = f"    {local_var_info.var_type} {root_var} = {{0}};  // ローカル変数"
-                    if decl_line not in lines:
-                        lines.append(decl_line)
-                    return init  # 完全パスでの初期化を返す
-                else:
-                    # 型情報が見つからない場合はTODOコメント
-                    return f"// TODO: {root_var} は対象関数内のローカル変数です（型情報なし）"
-            else:
-                # グローバル変数の場合はそのまま返す
-                return init
+        # v4.3.1: 配列インデックス内のローカル変数をチェック（左辺）
+        array_index_vars = self._extract_array_index_variables(var_part)
+        for idx_var in array_index_vars:
+            if self._is_local_variable(idx_var, parsed_data) or self._is_unknown_variable(idx_var, parsed_data):
+                return f"// TODO: 配列インデックス {idx_var} はローカル変数のため直接初期化できません（{var_part}）"
         
-        # 問題1: 単独の変数がローカル変数かチェック
+        # v4.3.1: 右辺の値にローカル変数が含まれるかチェック
+        value_local_var = self._check_value_for_local_variables(value_part, parsed_data)
+        if value_local_var:
+            return f"// TODO: {value_local_var} は対象関数内のローカル変数です。テスト値を明示的に設定してください。\n    // {init}"
+        
+        # 構造体メンバーアクセス（.を含む）の場合
+        if '.' in var_part:
+            # 変数ルート名を抽出（例: Utx73.Utm13 -> Utx73, Utv12[Utv19] -> Utv12）
+            root_var = var_part.split('.')[0]
+            # 配列アクセスを除去（例: Utv12[0] -> Utv12）
+            root_var = re.sub(r'\[\w+\]', '', root_var)
+            
+            # v4.3.1: ローカル変数チェック（TODOコメント化）
+            if self._is_local_variable(root_var, parsed_data):
+                return f"// TODO: {root_var} は対象関数内のローカル変数です。テスト設計を見直してください。\n    // {init}"
+            
+            # v4.3.1: 未知の変数チェック（グローバル変数リストにない）
+            if self._is_unknown_variable(root_var, parsed_data):
+                return f"// TODO: {root_var} は対象関数内のローカル変数と推測されます。\n    // {init}"
+            
+            # グローバル変数の場合はそのまま返す
+            return init
+        
+        # 単独の変数名の場合
+        # v4.3.1: ローカル変数チェック（TODOコメント化）
         if self._is_local_variable(var_part, parsed_data):
-            local_var_info = self._get_local_variable_info(var_part, parsed_data)
-            if local_var_info:
-                # ローカル変数宣言を追加（重複チェック）
-                decl_line = f"    {local_var_info.var_type} {var_part} = {{0}};  // ローカル変数"
-                if decl_line not in lines:
-                    lines.append(decl_line)
-                return init  # 元の初期化コードを返す
-            else:
-                # 型情報が見つからない場合はTODOコメント
-                return f"// TODO: {var_part} は対象関数内のローカル変数です（型情報なし）"
+            return f"// TODO: {var_part} は対象関数内のローカル変数です。テスト設計を見直してください。\n    // {var_part} = {value_part}"
+        
+        # v4.3.1: 未知の変数チェック（グローバル変数リストにもローカル変数にもない）
+        if self._is_unknown_variable(var_part, parsed_data):
+            return f"// TODO: {var_part} は対象関数内のローカル変数と推測されます。\n    // {var_part} = {value_part}"
         
         return init
+    
+    def _check_value_for_local_variables(self, value_part: str, parsed_data: ParsedData) -> Optional[str]:
+        """
+        値の部分にローカル変数が含まれているかチェック
+        
+        v4.3.1追加
+        
+        Args:
+            value_part: 値の部分（例: "Utx204.Utm1.Utm33", "100", "GlobalVar"）
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            ローカル変数名（見つかった場合）、なければNone
+        """
+        # セミコロンやコメントを除去
+        clean_value = value_part.split(';')[0].split('//')[0].strip()
+        
+        # 数値の場合はスキップ
+        if clean_value.isdigit() or (clean_value.startswith('-') and clean_value[1:].isdigit()):
+            return None
+        if clean_value.startswith('0x') or clean_value.startswith('0X'):
+            return None
+        
+        # 構造体メンバーパスの場合、ルート変数をチェック
+        if '.' in clean_value:
+            root_var = clean_value.split('.')[0]
+            root_var = re.sub(r'\[\w+\]', '', root_var)
+            
+            if self._is_local_variable(root_var, parsed_data):
+                return root_var
+            if self._is_unknown_variable(root_var, parsed_data):
+                return root_var
+        else:
+            # 単独の変数名
+            clean_var = re.sub(r'\[\w+\]', '', clean_value)
+            if self._is_local_variable(clean_var, parsed_data):
+                return clean_var
+            if self._is_unknown_variable(clean_var, parsed_data):
+                return clean_var
+        
+        return None
+    
+    def _extract_array_index_variables(self, expression: str) -> List[str]:
+        """
+        配列アクセスのインデックス変数を抽出
+        
+        v4.3.1追加
+        
+        Args:
+            expression: 式（例: "Utv12[Utv19]", "arr[i].member"）
+        
+        Returns:
+            インデックス変数名のリスト（数値は除外）
+        
+        Examples:
+            >>> _extract_array_index_variables("Utv12[Utv19]")
+            ["Utv19"]
+            >>> _extract_array_index_variables("arr[0].member")
+            []
+        """
+        pattern = r'\[([a-zA-Z_]\w*)\]'
+        matches = re.findall(pattern, expression)
+        # 数値は除外
+        return [m for m in matches if not m.isdigit()]
     
     def _append_init_line(self, init: str, lines: List[str]) -> None:
         """
@@ -409,6 +479,50 @@ class TestFunctionGenerator:
             return False
         
         return var_name in parsed_data.local_variables
+    
+    def _is_unknown_variable(self, var_name: str, parsed_data: ParsedData) -> bool:
+        """
+        変数が未知の変数かどうかを判定（ローカル変数と推測）
+        
+        v4.3.1追加
+        
+        グローバル変数リストにもローカル変数リストにも存在しない変数は、
+        対象関数内のローカル変数である可能性が高い。
+        
+        Args:
+            var_name: 変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            未知の変数（ローカル変数と推測）の場合True
+        """
+        # 関数名やenum定数はスキップ
+        if self._is_function_or_enum(var_name, parsed_data):
+            return False
+        
+        # パラメータはスキップ
+        if parsed_data.function_info and parsed_data.function_info.parameters:
+            param_names = [p.get('name', '') for p in parsed_data.function_info.parameters]
+            if var_name in param_names:
+                return False
+        
+        # グローバル変数リストに存在するかチェック
+        if hasattr(parsed_data, 'variables') and parsed_data.variables:
+            global_var_names = [v.name for v in parsed_data.variables]
+            if var_name in global_var_names:
+                return False
+        
+        # グローバル変数名リストに存在するかチェック
+        if var_name in parsed_data.global_variables:
+            return False
+        
+        # ローカル変数リストに存在するかチェック
+        if hasattr(parsed_data, 'local_variables') and parsed_data.local_variables:
+            if var_name in parsed_data.local_variables:
+                return False  # _is_local_variableでTrue判定されるはず
+        
+        # どのリストにも存在しない場合は未知（ローカル変数と推測）
+        return True
     
     def _get_local_variable_info(self, var_name: str, parsed_data: ParsedData):
         """

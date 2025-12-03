@@ -4,6 +4,7 @@ BoundaryValueCalculatorモジュール
 境界値を計算して適切なテスト値を生成
 
 v3.3.0: ValueResolverを使用してTODOコメントを解消
+v4.3.1: 構造体メンバーパス全体を抽出するように修正
 """
 
 import sys
@@ -366,16 +367,32 @@ class BoundaryValueCalculator:
         条件式から変数を抽出
         
         v4.2.0: 数値リテラルを除外するように修正
+        v4.3.1: 構造体メンバーパス全体を抽出するように修正
         
         Args:
             expression: 条件式
         
         Returns:
-            変数名のリスト
+            変数名のリスト（構造体メンバーは完全パスで返す）
         """
-        # 変数パターン（配列アクセス含む）
-        pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:\[\d+\])?)\b'
-        variables = re.findall(pattern, expression)
+        # v4.3.1: まず構造体メンバーアクセスのパターンを抽出
+        # パターン: identifier.member.member または identifier[n].member
+        struct_pattern = r'\b([a-zA-Z_]\w*(?:\[\w+\])?(?:\.[a-zA-Z_]\w*)+)\b'
+        struct_members = re.findall(struct_pattern, expression)
+        
+        # 構造体メンバーとして抽出されたパスのルート変数と各パーツを記録
+        struct_parts = set()
+        for member_path in struct_members:
+            # パスを分解してすべてのパーツを記録（これらは単独変数として除外）
+            parts = re.split(r'[.\[\]]', member_path)
+            for part in parts:
+                if part and not part.isdigit():
+                    struct_parts.add(part)
+        
+        # 配列アクセス含む変数パターン
+        # v4.3.1: 構造体メンバーでない単独変数・配列アクセスを抽出
+        pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:\[\w+\])?)\b'
+        simple_variables = re.findall(pattern, expression)
         
         # C言語キーワードを除外
         keywords = {'if', 'else', 'for', 'while', 'switch', 'case', 'default', 
@@ -384,10 +401,18 @@ class BoundaryValueCalculator:
                    'true', 'false', 'NULL', 'abs'}
         
         # v4.2.0: 数値リテラルを除外
-        variables = [v for v in variables if v not in keywords]
-        variables = [v for v in variables if not v.isdigit()]
+        # v4.3.1: 構造体メンバーのパーツを除外
+        simple_variables = [v for v in simple_variables if v not in keywords]
+        simple_variables = [v for v in simple_variables if not v.isdigit()]
+        simple_variables = [v for v in simple_variables if v not in struct_parts]
         
-        return list(set(variables))  # 重複を除去
+        # 結果を結合（構造体メンバーパスが優先）
+        result = list(struct_members)
+        for var in simple_variables:
+            if var not in result:
+                result.append(var)
+        
+        return list(set(result))  # 重複を除去
     
     def suggest_enum_values(self, variable: str, enum_name: str, pattern: str) -> Dict[str, str]:
         """
