@@ -581,7 +581,7 @@ class CCodeParser:
     
     def _extract_local_variables(self, source_code: str, function_name: str) -> Dict[str, LocalVariableInfo]:
         """
-        ローカル変数を抽出 (v4.2.0で追加)
+        ローカル変数を抽出 (v4.2.0で追加, v4.3.2でfor文内変数宣言対応)
         
         Args:
             source_code: ソースコード
@@ -643,8 +643,30 @@ class CCodeParser:
             line_clean = re.sub(r'//.*$', '', line)
             line_clean = re.sub(r'/\*.*?\*/', '', line_clean)
             
-            # for文の初期化部分は除外
-            if re.match(r'\s*for\s*\(', line_clean):
+            # v4.3.2: for文内の変数宣言を抽出（for文を完全にスキップしない）
+            for_var_match = re.search(r'for\s*\(\s*(\w+(?:\s+\w+)?)\s+(\w+)\s*=\s*([^;]+)', line_clean)
+            if for_var_match:
+                type_name = for_var_match.group(1).strip()
+                var_name = for_var_match.group(2).strip()
+                init_value = for_var_match.group(3).strip()
+                
+                # キーワードチェック
+                if type_name.lower() not in keywords and var_name.lower() not in keywords:
+                    # 型名が有効かチェック
+                    if re.match(r'^[A-Za-z_]', type_name):
+                        # 変数名が有効かチェック
+                        if re.match(r'^[A-Za-z_]\w*$', var_name):
+                            local_vars[var_name] = LocalVariableInfo(
+                                name=var_name,
+                                var_type=type_name,
+                                scope=function_name,
+                                line_number=line_no,
+                                is_initialized=True,
+                                initial_value=init_value,
+                                is_loop_variable=True  # v4.3.2: ループ変数フラグ
+                            )
+                            self.logger.debug(f"for文内ループ変数を検出: {var_name} (型: {type_name})")
+                # for文の行は通常のパターンではスキップ
                 continue
             
             # 関数呼び出しは除外
@@ -682,6 +704,7 @@ class CCodeParser:
                     initial_value=init_value
                 )
         
+        self.logger.info(f"ローカル変数抽出完了: {list(local_vars.keys())}")
         return local_vars
 
 

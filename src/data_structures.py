@@ -287,13 +287,14 @@ class VariableDeclInfo:
 
 @dataclass
 class LocalVariableInfo:
-    """ローカル変数情報 (v4.2.0で追加)"""
+    """ローカル変数情報 (v4.2.0で追加, v4.3.2でループ変数対応)"""
     name: str
     var_type: str
     scope: str  # 関数名やブロック識別
     line_number: int = 0
     is_initialized: bool = False
     initial_value: str = ""
+    is_loop_variable: bool = False  # v4.3.2: for文等のループ変数かどうか
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -302,7 +303,8 @@ class LocalVariableInfo:
             'scope': self.scope,
             'line_number': self.line_number,
             'is_initialized': self.is_initialized,
-            'initial_value': self.initial_value
+            'initial_value': self.initial_value,
+            'is_loop_variable': self.is_loop_variable
         }
 
 

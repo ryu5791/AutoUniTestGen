@@ -314,6 +314,8 @@ class TestFunctionGenerator:
         v4.2.0追加
         v4.3.1修正: ローカル変数へのアクセスをTODOコメント化（テスト関数外から直接初期化不可）
                    右辺の値にローカル変数が含まれる場合もTODOコメント化
+        v4.3.3修正: 配列インデックス変数自体への代入を防止（問題E対応）
+                   構造体メンバー名への代入を防止（問題B対応）
         
         Args:
             init: 生成された初期化コード
@@ -341,6 +343,16 @@ class TestFunctionGenerator:
         # 問題3: 数値リテラルへの代入を防止
         if var_part.isdigit() or (var_part.startswith('-') and var_part[1:].isdigit()):
             return f"// TODO: 数値リテラル {var_part} は変数ではないため初期化できません"
+        
+        # v4.3.3: 構造体メンバー名への代入を防止（問題B対応）
+        # 変数名が構造体メンバー名と同じ場合（例: Utm27）
+        if self._is_struct_member_name(var_part, parsed_data):
+            return f"// TODO: {var_part} は構造体メンバー名のため変数として初期化できません"
+        
+        # v4.3.3: 配列インデックス変数自体への代入を防止（問題E対応）
+        # 変数がループ変数かつ配列インデックスとして使用されている場合
+        if self._is_array_index_variable(var_part, parsed_data):
+            return f"// TODO: {var_part} は配列インデックス変数のため直接初期化できません"
         
         # v4.3.1: 配列インデックス内のローカル変数をチェック（左辺）
         array_index_vars = self._extract_array_index_variables(var_part)
@@ -523,6 +535,58 @@ class TestFunctionGenerator:
         
         # どのリストにも存在しない場合は未知（ローカル変数と推測）
         return True
+    
+    def _is_struct_member_name(self, var_name: str, parsed_data: ParsedData) -> bool:
+        """
+        識別子が構造体メンバー名かどうかを判定
+        
+        v4.3.3追加（問題B対応）
+        
+        Args:
+            var_name: 識別子名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            構造体メンバー名の場合True
+        """
+        # 構造体定義から全てのメンバー名を収集
+        if not hasattr(parsed_data, 'struct_definitions') or not parsed_data.struct_definitions:
+            return False
+        
+        for struct_def in parsed_data.struct_definitions:
+            for member in struct_def.members:
+                if member.name == var_name:
+                    return True
+                # ネストした構造体もチェック
+                if member.nested_struct:
+                    for nested_member in member.nested_struct.members:
+                        if nested_member.name == var_name:
+                            return True
+        
+        return False
+    
+    def _is_array_index_variable(self, var_name: str, parsed_data: ParsedData) -> bool:
+        """
+        変数が配列インデックス変数（ループ変数）かどうかを判定
+        
+        v4.3.3追加（問題E対応）
+        
+        Args:
+            var_name: 変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            配列インデックス変数の場合True
+        """
+        # ローカル変数情報を取得
+        if not hasattr(parsed_data, 'local_variables') or not parsed_data.local_variables:
+            return False
+        
+        local_var_info = parsed_data.local_variables.get(var_name)
+        if local_var_info and hasattr(local_var_info, 'is_loop_variable') and local_var_info.is_loop_variable:
+            return True
+        
+        return False
     
     def _get_local_variable_info(self, var_name: str, parsed_data: ParsedData):
         """
@@ -1120,6 +1184,8 @@ class TestFunctionGenerator:
         """
         初期化コードを検証して問題があれば修正
         
+        v4.3.3修正: 構造体メンバー名・配列インデックス変数への代入を防止
+        
         Args:
             init_code: 初期化コード
             parsed_data: 解析済みデータ
@@ -1135,6 +1201,14 @@ class TestFunctionGenerator:
         var_name = match.group(1)
         value_part = match.group(2).strip()
         
+        # v4.3.3: 構造体メンバー名への代入を防止（問題B対応）
+        if self._is_struct_member_name(var_name, parsed_data):
+            return f"// TODO: {var_name} は構造体メンバー名のため変数として初期化できません"
+        
+        # v4.3.3: 配列インデックス変数への代入を防止（問題E対応）
+        if self._is_array_index_variable(var_name, parsed_data):
+            return f"// TODO: {var_name} は配列インデックス変数のため直接初期化できません"
+        
         # 値の部分に関数が含まれている場合
         if self._is_function(value_part, parsed_data):
             # 関数の場合はモックの戻り値を使用
@@ -1148,12 +1222,8 @@ class TestFunctionGenerator:
         
         # 変数自体がenum定数の場合（エラー）
         if self._is_enum_constant(var_name, parsed_data):
-            # enum定数は代入できないので、適切な変数を見つける
-            # グローバル変数の中から適切なものを探す
-            for gvar in parsed_data.global_variables:
-                if not self._is_function_or_enum(gvar, parsed_data):
-                    return f"{gvar} = {value_part};  // 修正: {var_name}はenum定数のため{gvar}に代入"
-            return f"// ERROR: {var_name}はenum定数のため変数として初期化できません"
+            # enum定数は代入できないので、TODOコメント化
+            return f"// TODO: {var_name}はenum定数のため変数として初期化できません"
         
         return init_code
     
