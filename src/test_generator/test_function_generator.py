@@ -6,6 +6,7 @@ Unityテスト関数を生成
 v3.3.0: ValueResolverを使用してTODOコメントを解消
 v4.2.0: ローカル変数/構造体メンバー/数値リテラル対応
 v4.3.1: ローカル変数へのアクセスをTODOコメント化、構造体メンバーパス抽出を修正
+v4.3.3.1: AssignableVariableCheckerによる代入可能判定の一元化
 """
 
 import sys
@@ -20,6 +21,7 @@ from src.data_structures import TestCase, ParsedData, Condition, ConditionType
 from src.test_generator.boundary_value_calculator import BoundaryValueCalculator
 from src.test_generator.comment_generator import CommentGenerator
 from src.test_generator.value_resolver import ValueResolver
+from src.test_generator.assignable_variable_checker import AssignableVariableChecker
 
 
 class TestFunctionGenerator:
@@ -316,6 +318,7 @@ class TestFunctionGenerator:
                    右辺の値にローカル変数が含まれる場合もTODOコメント化
         v4.3.3修正: 配列インデックス変数自体への代入を防止（問題E対応）
                    構造体メンバー名への代入を防止（問題B対応）
+        v4.3.3.1: AssignableVariableCheckerを使用した一元的な判定
         
         Args:
             init: 生成された初期化コード
@@ -340,59 +343,61 @@ class TestFunctionGenerator:
         var_part = match.group(1).strip()
         value_part = match.group(2).strip()
         
-        # 問題3: 数値リテラルへの代入を防止
-        if var_part.isdigit() or (var_part.startswith('-') and var_part[1:].isdigit()):
-            return f"// TODO: 数値リテラル {var_part} は変数ではないため初期化できません"
+        # AssignableVariableCheckerを使用して判定
+        checker = AssignableVariableChecker(parsed_data)
         
-        # v4.3.3: 構造体メンバー名への代入を防止（問題B対応）
-        # 変数名が構造体メンバー名と同じ場合（例: Utm27）
-        if self._is_struct_member_name(var_part, parsed_data):
-            return f"// TODO: {var_part} は構造体メンバー名のため変数として初期化できません"
+        # 左辺（代入先）が代入可能かチェック
+        if not checker.is_assignable(var_part):
+            reason = checker.get_reason(var_part)
+            return f"// TODO: {reason}"
         
-        # v4.3.3: 配列インデックス変数自体への代入を防止（問題E対応）
-        # 変数がループ変数かつ配列インデックスとして使用されている場合
-        if self._is_array_index_variable(var_part, parsed_data):
-            return f"// TODO: {var_part} は配列インデックス変数のため直接初期化できません"
-        
-        # v4.3.1: 配列インデックス内のローカル変数をチェック（左辺）
-        array_index_vars = self._extract_array_index_variables(var_part)
-        for idx_var in array_index_vars:
-            if self._is_local_variable(idx_var, parsed_data) or self._is_unknown_variable(idx_var, parsed_data):
-                return f"// TODO: 配列インデックス {idx_var} はローカル変数のため直接初期化できません（{var_part}）"
-        
-        # v4.3.1: 右辺の値にローカル変数が含まれるかチェック
-        value_local_var = self._check_value_for_local_variables(value_part, parsed_data)
+        # 右辺の値にローカル変数が含まれるかチェック
+        value_local_var = self._check_value_for_local_variables_v2(value_part, checker)
         if value_local_var:
             return f"// TODO: {value_local_var} は対象関数内のローカル変数です。テスト値を明示的に設定してください。\n    // {init}"
         
-        # 構造体メンバーアクセス（.を含む）の場合
-        if '.' in var_part:
-            # 変数ルート名を抽出（例: Utx73.Utm13 -> Utx73, Utv12[Utv19] -> Utv12）
-            root_var = var_part.split('.')[0]
-            # 配列アクセスを除去（例: Utv12[0] -> Utv12）
+        return init
+    
+    def _check_value_for_local_variables_v2(self, value_part: str, checker: AssignableVariableChecker) -> Optional[str]:
+        """
+        値の部分にローカル変数が含まれているかチェック（v4.3.3.1版）
+        
+        Args:
+            value_part: 値の部分（例: "Utx204.Utm1.Utm33", "100", "GlobalVar"）
+            checker: AssignableVariableCheckerインスタンス
+        
+        Returns:
+            ローカル変数名（見つかった場合）、なければNone
+        """
+        # セミコロンやコメントを除去
+        clean_value = value_part.split(';')[0].split('//')[0].strip()
+        
+        # 数値の場合はスキップ
+        if clean_value.isdigit() or (clean_value.startswith('-') and len(clean_value) > 1 and clean_value[1:].isdigit()):
+            return None
+        if clean_value.startswith('0x') or clean_value.startswith('0X'):
+            return None
+        
+        # 構造体メンバーパスの場合、ルート変数をチェック
+        if '.' in clean_value:
+            root_var = clean_value.split('.')[0]
             root_var = re.sub(r'\[\w+\]', '', root_var)
             
-            # v4.3.1: ローカル変数チェック（TODOコメント化）
-            if self._is_local_variable(root_var, parsed_data):
-                return f"// TODO: {root_var} は対象関数内のローカル変数です。テスト設計を見直してください。\n    // {init}"
-            
-            # v4.3.1: 未知の変数チェック（グローバル変数リストにない）
-            if self._is_unknown_variable(root_var, parsed_data):
-                return f"// TODO: {root_var} は対象関数内のローカル変数と推測されます。\n    // {init}"
-            
-            # グローバル変数の場合はそのまま返す
-            return init
+            reason_code = checker.get_reason_code(root_var)
+            if reason_code in [AssignableVariableChecker.REASON_LOCAL_VARIABLE,
+                              AssignableVariableChecker.REASON_LOOP_VARIABLE,
+                              AssignableVariableChecker.REASON_UNKNOWN_LOCAL]:
+                return root_var
+        else:
+            # 単独の変数名
+            clean_var = re.sub(r'\[\w+\]', '', clean_value)
+            reason_code = checker.get_reason_code(clean_var)
+            if reason_code in [AssignableVariableChecker.REASON_LOCAL_VARIABLE,
+                              AssignableVariableChecker.REASON_LOOP_VARIABLE,
+                              AssignableVariableChecker.REASON_UNKNOWN_LOCAL]:
+                return clean_var
         
-        # 単独の変数名の場合
-        # v4.3.1: ローカル変数チェック（TODOコメント化）
-        if self._is_local_variable(var_part, parsed_data):
-            return f"// TODO: {var_part} は対象関数内のローカル変数です。テスト設計を見直してください。\n    // {var_part} = {value_part}"
-        
-        # v4.3.1: 未知の変数チェック（グローバル変数リストにもローカル変数にもない）
-        if self._is_unknown_variable(var_part, parsed_data):
-            return f"// TODO: {var_part} は対象関数内のローカル変数と推測されます。\n    // {var_part} = {value_part}"
-        
-        return init
+        return None
     
     def _check_value_for_local_variables(self, value_part: str, parsed_data: ParsedData) -> Optional[str]:
         """
@@ -1185,6 +1190,7 @@ class TestFunctionGenerator:
         初期化コードを検証して問題があれば修正
         
         v4.3.3修正: 構造体メンバー名・配列インデックス変数への代入を防止
+        v4.3.3.1: AssignableVariableCheckerを使用した一元的な判定
         
         Args:
             init_code: 初期化コード
@@ -1194,36 +1200,27 @@ class TestFunctionGenerator:
             修正後の初期化コード
         """
         # "変数 = 値" の形式から変数と値を抽出
-        match = re.match(r'(\w+)\s*=\s*(.+)', init_code)
+        match = re.match(r'([\w\.]+(?:\[\w+\])?(?:\.[\w]+)*)\s*=\s*(.+)', init_code)
         if not match:
             return init_code
         
-        var_name = match.group(1)
+        var_name = match.group(1).strip()
         value_part = match.group(2).strip()
         
-        # v4.3.3: 構造体メンバー名への代入を防止（問題B対応）
-        if self._is_struct_member_name(var_name, parsed_data):
-            return f"// TODO: {var_name} は構造体メンバー名のため変数として初期化できません"
+        # AssignableVariableCheckerを使用して判定
+        checker = AssignableVariableChecker(parsed_data)
         
-        # v4.3.3: 配列インデックス変数への代入を防止（問題E対応）
-        if self._is_array_index_variable(var_name, parsed_data):
-            return f"// TODO: {var_name} は配列インデックス変数のため直接初期化できません"
+        # 変数が代入可能かチェック
+        if not checker.is_assignable(var_name):
+            reason = checker.get_reason(var_name)
+            return f"// TODO: {reason}"
         
         # 値の部分に関数が含まれている場合
-        if self._is_function(value_part, parsed_data):
+        if checker.is_function(value_part):
             # 関数の場合はモックの戻り値を使用
             return f"{var_name} = mock_{value_part}_return_value;  // 修正: {value_part}は関数"
         
         # 値の部分にenum定数が含まれている場合はそのまま（正しい使い方）
-        
-        # 変数自体が関数の場合（エラー）
-        if self._is_function(var_name, parsed_data):
-            return f"// ERROR: {var_name}は関数のため変数として初期化できません。モック設定を使用してください。"
-        
-        # 変数自体がenum定数の場合（エラー）
-        if self._is_enum_constant(var_name, parsed_data):
-            # enum定数は代入できないので、TODOコメント化
-            return f"// TODO: {var_name}はenum定数のため変数として初期化できません"
         
         return init_code
     

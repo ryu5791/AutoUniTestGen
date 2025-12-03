@@ -5,12 +5,13 @@ BoundaryValueCalculatorモジュール
 
 v3.3.0: ValueResolverを使用してTODOコメントを解消
 v4.3.1: 構造体メンバーパス全体を抽出するように修正
+v4.3.3.1: extract_assignable_variablesメソッド追加（AssignableVariableChecker統合）
 """
 
 import sys
 import os
 import re
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List, Any
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
@@ -413,6 +414,30 @@ class BoundaryValueCalculator:
                 result.append(var)
         
         return list(set(result))  # 重複を除去
+    
+    def extract_assignable_variables(self, expression: str, parsed_data: Any) -> Tuple[List[str], List[Tuple[str, str]]]:
+        """
+        条件式から変数を抽出し、代入可能/不可に分類
+        
+        v4.3.3.1追加: AssignableVariableCheckerを使用して一元的に判定
+        
+        Args:
+            expression: 条件式
+            parsed_data: ParsedDataオブジェクト
+        
+        Returns:
+            (assignable_vars, non_assignable_vars)
+            assignable_vars: 代入可能な変数のリスト
+            non_assignable_vars: [(変数名, 理由), ...] のリスト
+        """
+        from src.test_generator.assignable_variable_checker import AssignableVariableChecker
+        
+        # 条件式から全変数を抽出
+        all_vars = self.extract_variables(expression)
+        
+        # AssignableVariableCheckerで分類
+        checker = AssignableVariableChecker(parsed_data)
+        return checker.classify_variables(all_vars)
     
     def suggest_enum_values(self, variable: str, enum_name: str, pattern: str) -> Dict[str, str]:
         """
