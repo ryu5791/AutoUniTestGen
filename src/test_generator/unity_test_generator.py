@@ -113,8 +113,13 @@ class UnityTestGenerator:
         """
         self.logger.info("v2.4.3: スタンドアロン版テストコードの生成を開始")
         
+        # v4.3.4.1: 外部関数のプロトタイプ宣言をstaticに変換
+        modified_source = self._convert_external_prototypes_to_static(
+            source_code, parsed_data.external_functions
+        )
+        
         # 元のソースコードをベースにする
-        parts = [source_code]
+        parts = [modified_source]
         
         # 区切り線を追加
         parts.append("\n\n" + "//" + "=" * 78)
@@ -153,6 +158,48 @@ class UnityTestGenerator:
         self.logger.info(f"✓ v2.4.3: スタンドアロン版テストコード生成完了")
         
         return result
+    
+    def _convert_external_prototypes_to_static(self, source_code: str, 
+                                                external_functions: list) -> str:
+        """
+        外部関数のプロトタイプ宣言をstaticに変換（v4.3.4.1）
+        
+        モック関数と同じシグネチャにするため、元のプロトタイプ宣言にstaticを追加
+        
+        Args:
+            source_code: 元のソースコード
+            external_functions: 外部関数名のリスト
+        
+        Returns:
+            変換後のソースコード
+        """
+        import re
+        
+        if not external_functions:
+            return source_code
+        
+        modified = source_code
+        
+        for func_name in external_functions:
+            # プロトタイプ宣言のパターン: 戻り値型 関数名(...);
+            # static がまだ付いていないものを対象
+            # 例: void Utf18(const Utx174 Utx40);
+            #     uint8_t Utf8(void);
+            pattern = rf'^(\s*)((?:(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:\w+)(?:\s*\*)?)\s+)({re.escape(func_name)})\s*\(([^)]*)\)\s*;'
+            
+            def add_static(match):
+                indent = match.group(1)
+                return_type = match.group(2)
+                name = match.group(3)
+                params = match.group(4)
+                # すでにstaticが付いていないか確認
+                if 'static' in return_type:
+                    return match.group(0)
+                return f'{indent}static {return_type}{name}({params});'
+            
+            modified = re.sub(pattern, add_static, modified, flags=re.MULTILINE)
+        
+        return modified
     
     def _generate_header(self, parsed_data: ParsedData) -> str:
         """

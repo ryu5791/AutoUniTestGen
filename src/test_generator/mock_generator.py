@@ -294,7 +294,7 @@ class MockGenerator:
         """
         モック関数の実装を生成
         v4.3.4: const維持、ポインタのメモリコピー
-        注意: static修飾子は元のプロトタイプ宣言との整合性のため付与しない
+        v4.3.4.1: static修飾子追加
         
         Returns:
             モック関数のコード
@@ -316,8 +316,8 @@ class MockGenerator:
             else:
                 params_str = "void"
             
-            # v4.3.4: 元のプロトタイプ宣言との整合性のためstaticは付与しない
-            lines.append(f"{mock_func.return_type} {mock_func.name}({params_str}) {{")
+            # v4.3.4.1: static修飾子を追加
+            lines.append(f"static {mock_func.return_type} {mock_func.name}({params_str}) {{")
             lines.append(f"    {mock_func.call_count_variable}++;")
             
             # パラメータをキャプチャ（v4.3.4: ポインタはmemcpy）
