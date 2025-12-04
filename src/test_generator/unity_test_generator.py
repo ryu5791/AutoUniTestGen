@@ -2,6 +2,10 @@
 UnityTestGeneratorモジュール
 
 全てのコンポーネントを統合してUnityテストコードを生成
+
+v4.4:
+- テスト対象関数をstaticに変換する機能を追加
+- 外部関数のプロトタイプ宣言だけでなく、テスト対象関数もstaticに変換
 """
 
 import sys
@@ -118,6 +122,11 @@ class UnityTestGenerator:
             source_code, parsed_data.external_functions
         )
         
+        # v4.4: テスト対象関数をstaticに変換
+        modified_source = self._convert_target_function_to_static(
+            modified_source, parsed_data.function_name
+        )
+        
         # 元のソースコードをベースにする
         parts = [modified_source]
         
@@ -198,6 +207,64 @@ class UnityTestGenerator:
                 return f'{indent}static {return_type}{name}({params});'
             
             modified = re.sub(pattern, add_static, modified, flags=re.MULTILINE)
+        
+        return modified
+    
+    def _convert_target_function_to_static(self, source_code: str, function_name: str) -> str:
+        """
+        テスト対象関数をstaticに変換（v4.4）
+        
+        テスト対象関数の定義とプロトタイプ宣言の両方にstaticを追加する
+        
+        Args:
+            source_code: 元のソースコード
+            function_name: テスト対象関数名
+        
+        Returns:
+            変換後のソースコード
+        """
+        import re
+        
+        if not function_name:
+            return source_code
+        
+        modified = source_code
+        
+        # パターン1: 関数定義 (戻り値型 関数名(...) {)
+        # 例: void Utf1(void) {
+        #     uint8_t myFunc(int a, int b) {
+        func_def_pattern = rf'^(\s*)((?:(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:\w+)(?:\s*\*)*)\s+)({re.escape(function_name)})\s*\(([^)]*)\)\s*{{'
+        
+        def add_static_to_def(match):
+            indent = match.group(1)
+            return_type = match.group(2)
+            name = match.group(3)
+            params = match.group(4)
+            # すでにstaticが付いていないか確認
+            if 'static' in return_type:
+                return match.group(0)
+            self.logger.info(f"v4.4: 関数定義 {name} にstaticを追加")
+            return f'{indent}static {return_type}{name}({params}) {{'
+        
+        modified = re.sub(func_def_pattern, add_static_to_def, modified, flags=re.MULTILINE)
+        
+        # パターン2: プロトタイプ宣言 (戻り値型 関数名(...);)
+        # 例: void Utf1(void);
+        #     uint8_t myFunc(int a, int b);
+        proto_pattern = rf'^(\s*)((?:(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:\w+)(?:\s*\*)*)\s+)({re.escape(function_name)})\s*\(([^)]*)\)\s*;'
+        
+        def add_static_to_proto(match):
+            indent = match.group(1)
+            return_type = match.group(2)
+            name = match.group(3)
+            params = match.group(4)
+            # すでにstaticが付いていないか確認
+            if 'static' in return_type:
+                return match.group(0)
+            self.logger.info(f"v4.4: プロトタイプ宣言 {name} にstaticを追加")
+            return f'{indent}static {return_type}{name}({params});'
+        
+        modified = re.sub(proto_pattern, add_static_to_proto, modified, flags=re.MULTILINE)
         
         return modified
     

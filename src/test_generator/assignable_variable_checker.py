@@ -10,6 +10,13 @@ v4.3.3.1新規作成:
 - 関数名への代入防止
 - 配列インデックス変数への代入防止
 
+v4.4: 標準マクロ定数への代入防止
+- limits.h: CHAR_MAX, INT_MAX, UINT_MAX, UCHAR_MAX, etc.
+- stdint.h: INT8_MAX, UINT8_MAX, INT16_MAX, etc.
+- stdbool.h: true, false
+- stddef.h: NULL
+- float.h: FLT_MAX, DBL_MAX, etc.
+
 代入可能な変数:
 - グローバル変数
 - 関数パラメータ
@@ -39,6 +46,75 @@ class AssignableVariableChecker:
     REASON_UNKNOWN_LOCAL = "unknown_local"  # グローバルにもローカルにも登録されていない
     REASON_ARRAY_INDEX_LOCAL = "array_index_local"  # 配列インデックス内のローカル変数
     REASON_MACRO = "macro"  # マクロ（関数マクロ・変数マクロ）
+    REASON_STANDARD_MACRO_CONSTANT = "standard_macro_constant"  # v4.4: 標準マクロ定数
+    
+    # v4.4: 標準マクロ定数（代入不可）
+    # これらは <limits.h>, <stdint.h>, <stdbool.h>, <stddef.h>, <float.h> で定義される
+    STANDARD_MACRO_CONSTANTS: Set[str] = {
+        # limits.h - CHAR
+        'CHAR_BIT', 'CHAR_MAX', 'CHAR_MIN',
+        # limits.h - INT
+        'INT_MAX', 'INT_MIN', 'UINT_MAX',
+        # limits.h - SIGNED CHAR
+        'SCHAR_MAX', 'SCHAR_MIN',
+        # limits.h - SHORT
+        'SHRT_MAX', 'SHRT_MIN',
+        # limits.h - LONG
+        'LONG_MAX', 'LONG_MIN',
+        # limits.h - UNSIGNED
+        'UCHAR_MAX', 'USHRT_MAX', 'ULONG_MAX',
+        # limits.h - LONG LONG
+        'LLONG_MIN', 'LLONG_MAX', 'ULLONG_MAX',
+        
+        # stdint.h - INT8
+        'INT8_MIN', 'INT8_MAX', 'UINT8_MAX',
+        # stdint.h - INT16
+        'INT16_MIN', 'INT16_MAX', 'UINT16_MAX',
+        # stdint.h - INT32
+        'INT32_MIN', 'INT32_MAX', 'UINT32_MAX',
+        # stdint.h - INT64
+        'INT64_MIN', 'INT64_MAX', 'UINT64_MAX',
+        
+        # stdint.h - Other
+        'SIZE_MAX', 'PTRDIFF_MIN', 'PTRDIFF_MAX',
+        'INTMAX_MIN', 'INTMAX_MAX', 'UINTMAX_MAX',
+        'INTPTR_MIN', 'INTPTR_MAX', 'UINTPTR_MAX',
+        'WCHAR_MIN', 'WCHAR_MAX',
+        'WINT_MIN', 'WINT_MAX',
+        'SIG_ATOMIC_MIN', 'SIG_ATOMIC_MAX',
+        
+        # stdbool.h
+        'true', 'false',
+        
+        # stddef.h
+        'NULL',
+        
+        # float.h（浮動小数点定数）
+        'FLT_MAX', 'FLT_MIN', 'FLT_EPSILON',
+        'FLT_RADIX', 'FLT_ROUNDS', 'FLT_DIG', 'FLT_MANT_DIG',
+        'FLT_MIN_EXP', 'FLT_MAX_EXP', 'FLT_MIN_10_EXP', 'FLT_MAX_10_EXP',
+        'DBL_MAX', 'DBL_MIN', 'DBL_EPSILON',
+        'DBL_DIG', 'DBL_MANT_DIG',
+        'DBL_MIN_EXP', 'DBL_MAX_EXP', 'DBL_MIN_10_EXP', 'DBL_MAX_10_EXP',
+        'LDBL_MAX', 'LDBL_MIN', 'LDBL_EPSILON',
+        'LDBL_DIG', 'LDBL_MANT_DIG',
+        'LDBL_MIN_EXP', 'LDBL_MAX_EXP', 'LDBL_MIN_10_EXP', 'LDBL_MAX_10_EXP',
+        
+        # errno.h
+        'EDOM', 'ERANGE', 'EILSEQ',
+        
+        # signal.h
+        'SIGABRT', 'SIGFPE', 'SIGILL', 'SIGINT', 'SIGSEGV', 'SIGTERM',
+        
+        # stdlib.h
+        'EXIT_SUCCESS', 'EXIT_FAILURE', 'RAND_MAX', 'MB_CUR_MAX',
+        
+        # stdio.h
+        'EOF', 'BUFSIZ', 'FOPEN_MAX', 'FILENAME_MAX',
+        'L_tmpnam', 'TMP_MAX',
+        'SEEK_SET', 'SEEK_CUR', 'SEEK_END',
+        '_IOFBF', '_IOLBF', '_IONBF',
+    }
     
     def __init__(self, parsed_data: Any):
         """
@@ -60,6 +136,10 @@ class AssignableVariableChecker:
     
     def _build_non_assignable_set(self):
         """代入不可能な識別子のセットを構築"""
+        
+        # 0. v4.4: 標準マクロ定数（最優先で代入不可）
+        for const_name in self.STANDARD_MACRO_CONSTANTS:
+            self._non_assignable[const_name] = self.REASON_STANDARD_MACRO_CONSTANT
         
         # 1. ローカル変数（すべて代入不可）
         if hasattr(self.parsed_data, 'local_variables') and self.parsed_data.local_variables:
@@ -320,6 +400,7 @@ class AssignableVariableChecker:
             self.REASON_UNKNOWN_LOCAL: f"{prefix}関数内ローカル変数と推測されます{suffix}",
             self.REASON_ARRAY_INDEX_LOCAL: f"{prefix}ローカル変数のため直接初期化できません{suffix}",
             self.REASON_MACRO: f"{prefix}マクロのため変数として初期化できません{suffix}",
+            self.REASON_STANDARD_MACRO_CONSTANT: f"{prefix}標準ライブラリのマクロ定数のため代入できません{suffix}",
         }
         
         return reason_map.get(reason_code, f"{prefix}代入不可{suffix}")
@@ -437,12 +518,24 @@ class AssignableVariableChecker:
         if name in self._non_assignable:
             return self._non_assignable[name] == self.REASON_FUNCTION_NAME
         return False
+    
+    def is_standard_macro_constant(self, name: str) -> bool:
+        """
+        識別子が標準マクロ定数かどうかを判定（v4.4）
+        
+        Args:
+            name: 識別子名
+        
+        Returns:
+            標準マクロ定数の場合True
+        """
+        return name in self.STANDARD_MACRO_CONSTANTS
 
 
 if __name__ == "__main__":
     # AssignableVariableCheckerのテスト
     print("=" * 70)
-    print("AssignableVariableChecker v4.3.3.1 のテスト")
+    print("AssignableVariableChecker v4.4 のテスト")
     print("=" * 70)
     print()
     
@@ -534,10 +627,36 @@ if __name__ == "__main__":
             print(f"      理由: {reason}")
     
     print()
-    print("3. 変数分類のテスト")
+    print("3. v4.4: 標準マクロ定数のテスト")
     print("-" * 40)
     
-    test_vars = ['Utx116', 'Utv19', 'Utm27', 'Utv1', 'Utf7', 'Utx130.Utm6']
+    macro_const_tests = [
+        ('UCHAR_MAX', False, 'limits.h 定数'),
+        ('INT_MAX', False, 'limits.h 定数'),
+        ('INT_MIN', False, 'limits.h 定数'),
+        ('UINT8_MAX', False, 'stdint.h 定数'),
+        ('UINT16_MAX', False, 'stdint.h 定数'),
+        ('UINT32_MAX', False, 'stdint.h 定数'),
+        ('true', False, 'stdbool.h 定数'),
+        ('false', False, 'stdbool.h 定数'),
+        ('NULL', False, 'stddef.h 定数'),
+        ('FLT_MAX', False, 'float.h 定数'),
+        ('EOF', False, 'stdio.h 定数'),
+    ]
+    
+    for var, expected, desc in macro_const_tests:
+        result = checker.is_assignable(var)
+        status = "✓" if result == expected else "✗"
+        reason = checker.get_reason(var) if not result else ""
+        print(f"  {status} {var:30s} → {result} ({desc})")
+        if reason:
+            print(f"      理由: {reason}")
+    
+    print()
+    print("4. 変数分類のテスト")
+    print("-" * 40)
+    
+    test_vars = ['Utx116', 'Utv19', 'Utm27', 'Utv1', 'Utf7', 'Utx130.Utm6', 'UCHAR_MAX', 'INT_MAX']
     assignable, non_assignable = checker.classify_variables(test_vars)
     
     print(f"  入力: {test_vars}")
@@ -548,5 +667,5 @@ if __name__ == "__main__":
     
     print()
     print("=" * 70)
-    print("✓ AssignableVariableChecker v4.3.3.1 が正常に動作しました")
+    print("✓ AssignableVariableChecker v4.4 が正常に動作しました")
     print("=" * 70)
