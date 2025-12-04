@@ -511,12 +511,24 @@ class CCodeParser:
                     )
                 
                 def _get_type_str(self, type_node) -> str:
+                    """型ノードから型文字列を取得（v4.3.4: const修飾子対応）"""
                     if isinstance(type_node, c_ast.TypeDecl):
-                        return self._get_type_str(type_node.type)
+                        # const修飾子を取得
+                        quals = getattr(type_node, 'quals', []) or []
+                        base_type = self._get_type_str(type_node.type)
+                        if 'const' in quals:
+                            return f'const {base_type}'
+                        return base_type
                     elif isinstance(type_node, c_ast.IdentifierType):
                         return ' '.join(type_node.names)
                     elif isinstance(type_node, c_ast.PtrDecl):
-                        return self._get_type_str(type_node.type) + '*'
+                        # ポインタの場合、const修飾子をチェック
+                        quals = getattr(type_node, 'quals', []) or []
+                        base_type = self._get_type_str(type_node.type)
+                        ptr_type = base_type + ' *'
+                        if 'const' in quals:
+                            ptr_type = ptr_type + ' const'
+                        return ptr_type
                     elif isinstance(type_node, c_ast.ArrayDecl):
                         return self._get_type_str(type_node.type) + '*'
                     else:

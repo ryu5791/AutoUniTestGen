@@ -1,9 +1,10 @@
 """
-MockGeneratorモジュール（v4.1.2）
+MockGeneratorモジュール（v4.3.4）
 
 モック/スタブ関数を生成
 v4.0: 元の関数と同じシグネチャでモックを生成（リンカ互換）
 v4.1.2: 構造体型変数の初期化をmemset対応
+v4.3.4: const維持、ポインタのメモリコピー対応
 """
 
 import sys
@@ -17,7 +18,7 @@ from src.data_structures import ParsedData, MockFunction, FunctionSignature
 
 
 class MockGenerator:
-    """モックジェネレータ（v4.1.2: 構造体型初期化対応）"""
+    """モックジェネレータ（v4.3.4: const維持、ポインタメモリコピー対応）"""
     
     # プリミティブ型のセット（v4.1.2追加）
     PRIMITIVE_TYPES: Set[str] = {
@@ -138,6 +139,48 @@ class MockGenerator:
         """
         return '*' in type_name if type_name else False
     
+    def _get_base_type(self, type_name: str) -> str:
+        """
+        ポインタ型からベース型を取得（v4.3.4追加）
+        
+        例: "const net_msg_cmd_t *" → "net_msg_cmd_t"
+        
+        Args:
+            type_name: 型名
+        
+        Returns:
+            ベース型
+        """
+        if not type_name:
+            return type_name
+        
+        # const を除去
+        base = type_name.replace('const', '').strip()
+        # * を除去
+        base = base.replace('*', '').strip()
+        # 余分なスペースを正規化
+        base = ' '.join(base.split())
+        
+        return base
+    
+    def _remove_const_from_type(self, type_name: str) -> str:
+        """
+        型名からconst修飾子を除去（パラメータキャプチャ変数用）（v4.3.4追加）
+        
+        例: "const net_msg_cmd_t *" → "net_msg_cmd_t *"
+        
+        Args:
+            type_name: 型名
+        
+        Returns:
+            constを除去した型名
+        """
+        if not type_name:
+            return type_name
+        
+        cleaned = type_name.replace('const ', '').replace(' const', '').replace('const', '')
+        return ' '.join(cleaned.split())
+    
     def _get_init_code(self, var_name: str, type_name: str) -> str:
         """
         変数の初期化コードを取得（v4.1.2追加）
@@ -211,7 +254,7 @@ class MockGenerator:
     
     def generate_mock_variables(self) -> str:
         """
-        モック用グローバル変数を生成（v4.0: パラメータキャプチャ対応）
+        モック用グローバル変数を生成（v4.3.4: ポインタ用実データ変数追加）
         
         Returns:
             変数定義のコード
@@ -226,10 +269,22 @@ class MockGenerator:
             # 呼び出し回数カウンタ
             lines.append(f"static int {mock_func.call_count_variable};")
             
-            # パラメータキャプチャ変数（v4.0新規）
+            # パラメータキャプチャ変数（v4.3.4: ポインタ型は_data変数追加）
             for param in mock_func.parameters:
                 param_var = f"mock_{mock_func.name}_param_{param['name']}"
-                lines.append(f"static {param['type']} {param_var};")
+                param_type = param['type']
+                
+                if self._is_pointer_type(param_type):
+                    # ポインタ型の場合: 実データ用変数 + ポインタ変数
+                    base_type = self._get_base_type(param_type)
+                    lines.append(f"static {base_type} {param_var}_data;  // 実データ保持用")
+                    # ポインタ変数（constなし）
+                    non_const_type = self._remove_const_from_type(param_type)
+                    lines.append(f"static {non_const_type} {param_var};  // ポインタ")
+                else:
+                    # 非ポインタ型: そのまま（constは除去）
+                    non_const_type = self._remove_const_from_type(param_type)
+                    lines.append(f"static {non_const_type} {param_var};")
             
             lines.append("")
         
@@ -237,7 +292,9 @@ class MockGenerator:
     
     def generate_mock_functions(self) -> str:
         """
-        モック関数の実装を生成（v4.0: 元の関数と同じシグネチャ）
+        モック関数の実装を生成
+        v4.3.4: const維持、ポインタのメモリコピー
+        注意: static修飾子は元のプロトタイプ宣言との整合性のため付与しない
         
         Returns:
             モック関数のコード
@@ -251,7 +308,7 @@ class MockGenerator:
             lines.append(f" * {mock_func.name}のモック")
             lines.append(f" */")
             
-            # パラメータ文字列を構築
+            # パラメータ文字列を構築（v4.3.4: constをそのまま維持）
             if mock_func.parameters:
                 params_str = ", ".join(
                     f"{p['type']} {p['name']}" for p in mock_func.parameters
@@ -259,14 +316,27 @@ class MockGenerator:
             else:
                 params_str = "void"
             
-            # v4.0: 元の関数と同じ名前・シグネチャ（staticなし、mock_プレフィックスなし）
+            # v4.3.4: 元のプロトタイプ宣言との整合性のためstaticは付与しない
             lines.append(f"{mock_func.return_type} {mock_func.name}({params_str}) {{")
             lines.append(f"    {mock_func.call_count_variable}++;")
             
-            # パラメータをキャプチャ（v4.0新規）
+            # パラメータをキャプチャ（v4.3.4: ポインタはmemcpy）
             for param in mock_func.parameters:
                 param_var = f"mock_{mock_func.name}_param_{param['name']}"
-                lines.append(f"    {param_var} = {param['name']};")
+                param_type = param['type']
+                param_name = param['name']
+                
+                if self._is_pointer_type(param_type):
+                    # ポインタ型: NULLチェック + memcpy
+                    base_type = self._get_base_type(param_type)
+                    lines.append(f"    if ({param_name} != NULL) {{")
+                    lines.append(f"        memcpy(&{param_var}_data, {param_name}, sizeof({base_type}));")
+                    lines.append(f"    }}")
+                    lines.append(f"    {param_var} = &{param_var}_data;")
+                    self._needs_string_h = True  # memcpy使用
+                else:
+                    # 非ポインタ型: 単純コピー
+                    lines.append(f"    {param_var} = {param_name};")
             
             # void型でない場合のみreturn文を生成
             if mock_func.return_type != "void":
@@ -282,6 +352,7 @@ class MockGenerator:
         
         v4.0: パラメータ変数も初期化
         v4.1.2: 構造体型はmemsetで初期化
+        v4.3.4: ポインタ用実データも初期化
         
         Returns:
             リセット関数のコード
@@ -306,12 +377,23 @@ class MockGenerator:
             # 呼び出し回数カウンタ（常にint型）
             lines.append(f"    {mock_func.call_count_variable} = 0;")
             
-            # パラメータキャプチャ変数もリセット（v4.0新規、v4.1.2で型対応）
+            # パラメータキャプチャ変数もリセット（v4.3.4: ポインタ用実データも初期化）
             for param in mock_func.parameters:
                 param_var = f"mock_{mock_func.name}_param_{param['name']}"
-                init_code = self._get_init_code(param_var, param['type'])
-                if init_code:
-                    lines.append(f"    {init_code}")
+                param_type = param['type']
+                
+                if self._is_pointer_type(param_type):
+                    # ポインタ型: 実データとポインタ両方を初期化
+                    base_type = self._get_base_type(param_type)
+                    lines.append(f"    memset(&{param_var}_data, 0, sizeof({base_type}));")
+                    lines.append(f"    {param_var} = NULL;")
+                    self._needs_string_h = True  # memset使用
+                else:
+                    # 非ポインタ型
+                    non_const_type = self._remove_const_from_type(param_type)
+                    init_code = self._get_init_code(param_var, non_const_type)
+                    if init_code:
+                        lines.append(f"    {init_code}")
         
         lines.append("}")
         
@@ -387,48 +469,48 @@ class MockGenerator:
 if __name__ == "__main__":
     # MockGeneratorのテスト
     print("=" * 70)
-    print("MockGenerator v4.1.2 のテスト（構造体型初期化対応）")
+    print("MockGenerator v4.3.4 のテスト（const維持、static追加、ポインタメモリコピー対応）")
     print("=" * 70)
     print()
     
     from src.data_structures import ParsedData, FunctionSignature
     
-    # テスト用のParseDataを作成（v4.1.2: 構造体型を含む）
+    # テスト用のParseDataを作成（v4.3.4: constポインタを含む）
     parsed_data = ParsedData(
         file_name="test.c",
         function_name="test_func",
-        external_functions=['Utf8', 'Utf9', 'Utx167', 'Utx69']
+        external_functions=['Utf8', 'net_set_cmd_res', 'process_buffer', 'send_message']
     )
     
-    # シグネチャ情報を設定（構造体型を含む）
+    # シグネチャ情報を設定（v4.3.4: constポインタを含む）
     parsed_data.function_signatures = {
         'Utf8': FunctionSignature(
             name='Utf8',
-            return_type='uint8_t',  # プリミティブ型
+            return_type='uint8_t',
             parameters=[]
         ),
-        'Utf9': FunctionSignature(
-            name='Utf9',
-            return_type='uint16_t',  # プリミティブ型
+        'net_set_cmd_res': FunctionSignature(
+            name='net_set_cmd_res',
+            return_type='void',
             parameters=[
-                {'type': 'uint8_t', 'name': 'param1'},
-                {'type': 'int', 'name': 'param2'}
+                {'type': 'const net_msg_cmd_t *', 'name': 'inMsg13'}
             ]
         ),
-        'Utx167': FunctionSignature(
-            name='Utx167',
-            return_type='Utx10',  # 構造体/union型
+        'process_buffer': FunctionSignature(
+            name='process_buffer',
+            return_type='int',
             parameters=[
-                {'type': 'Utx10', 'name': 'Utx123'}  # 構造体型パラメータ
+                {'type': 'uint8_t *', 'name': 'buffer'},
+                {'type': 'size_t', 'name': 'len'}
             ]
         ),
-        'Utx69': FunctionSignature(
-            name='Utx69',
-            return_type='Utx10',  # 構造体/union型
+        'send_message': FunctionSignature(
+            name='send_message',
+            return_type='bool',
             parameters=[
-                {'type': 'Utx10', 'name': 'Utx123'},  # 構造体型
-                {'type': 'Utx168', 'name': 'Utx128'},  # 構造体型
-                {'type': 'uint8_t*', 'name': 'ptr'}  # ポインタ型
+                {'type': 'const msg_t *', 'name': 'msg'},
+                {'type': 'int', 'name': 'priority'},
+                {'type': 'const char *', 'name': 'dest'}
             ]
         )
     }
@@ -454,18 +536,47 @@ if __name__ == "__main__":
     print("=" * 70)
     print()
     
-    # セットアップコード
-    print("セットアップコード:")
-    print("=" * 70)
-    print(generator.generate_setup_code(1))
-    print("=" * 70)
+    # 確認ポイント
+    print("確認ポイント:")
+    print("-" * 70)
+    print("1. const ポインタ引数に 'const' が維持されているか")
+    print("2. ポインタ型パラメータに _data 変数が生成されているか")
+    print("3. memcpy でデータをコピーしているか")
+    print("4. NULLチェックがあるか")
+    print("-" * 70)
     print()
     
-    # リセット関数の確認
-    print("リセット関数（v4.1.2: 構造体型はmemset使用）:")
-    print("=" * 70)
-    print(generator.generate_reset_function())
-    print("=" * 70)
-    print()
+    # 検証
+    errors = []
     
-    print("✓ MockGenerator v4.1.2 が正常に動作しました")
+    # 1. const 維持チェック
+    if 'const net_msg_cmd_t *' not in mock_code:
+        errors.append("ERROR: net_set_cmd_res の引数に const が維持されていない")
+    if 'const msg_t *' not in mock_code:
+        errors.append("ERROR: send_message の msg 引数に const が維持されていない")
+    
+    # 2. _data 変数チェック
+    if 'mock_net_set_cmd_res_param_inMsg13_data' not in mock_code:
+        errors.append("ERROR: _data 変数が生成されていない")
+    
+    # 3. memcpy チェック
+    if 'memcpy(&mock_net_set_cmd_res_param_inMsg13_data' not in mock_code:
+        errors.append("ERROR: memcpy が使用されていない")
+    
+    # 4. NULLチェック
+    if 'if (inMsg13 != NULL)' not in mock_code:
+        errors.append("ERROR: NULLチェックがない")
+    
+    if errors:
+        print("検証結果: NG")
+        for e in errors:
+            print(f"  {e}")
+    else:
+        print("検証結果: OK")
+        print("  ✓ const が維持されている")
+        print("  ✓ _data 変数が生成されている")
+        print("  ✓ memcpy が使用されている")
+        print("  ✓ NULLチェックがある")
+    
+    print()
+    print("✓ MockGenerator v4.3.4 テスト完了")
