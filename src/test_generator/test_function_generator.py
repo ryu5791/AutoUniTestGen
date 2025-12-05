@@ -7,6 +7,7 @@ v3.3.0: ValueResolverを使用してTODOコメントを解消
 v4.2.0: ローカル変数/構造体メンバー/数値リテラル対応
 v4.3.1: ローカル変数へのアクセスをTODOコメント化、構造体メンバーパス抽出を修正
 v4.3.3.1: AssignableVariableCheckerによる代入可能判定の一元化
+v4.5: 配列変数への直接代入防止、条件式からの配列変数検出
 """
 
 import sys
@@ -279,37 +280,41 @@ class TestFunctionGenerator:
             lines.append("")
             return '\n'.join(lines)
         
+        # v4.5: 条件式を取得（配列変数検出用）
+        condition_expr = matching_condition.expression
+        
         # 条件タイプに応じて初期化コードを生成
         if matching_condition.type == ConditionType.SIMPLE_IF:
             init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
-            init = self._process_init_code(init, parsed_data, lines)
+            init = self._process_init_code(init, parsed_data, lines, condition_expr)
             if init:
                 self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.OR_CONDITION:
             init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                init = self._process_init_code(init, parsed_data, lines)
+                init = self._process_init_code(init, parsed_data, lines, condition_expr)
                 if init:
                     self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.AND_CONDITION:
             init_list = self._generate_and_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
-                init = self._process_init_code(init, parsed_data, lines)
+                init = self._process_init_code(init, parsed_data, lines, condition_expr)
                 if init:
                     self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.SWITCH:
             init = self._generate_switch_init(matching_condition, test_case, parsed_data)
-            init = self._process_init_code(init, parsed_data, lines)
+            init = self._process_init_code(init, parsed_data, lines, condition_expr)
             if init:
                 self._append_init_line(init, lines)
         
         lines.append("")
         return '\n'.join(lines)
     
-    def _process_init_code(self, init: Optional[str], parsed_data: ParsedData, lines: List[str]) -> Optional[str]:
+    def _process_init_code(self, init: Optional[str], parsed_data: ParsedData, lines: List[str], 
+                            condition_expr: str = None) -> Optional[str]:
         """
         初期化コードを処理（ローカル変数・構造体メンバー・数値リテラル対応）
         
@@ -319,11 +324,13 @@ class TestFunctionGenerator:
         v4.3.3修正: 配列インデックス変数自体への代入を防止（問題E対応）
                    構造体メンバー名への代入を防止（問題B対応）
         v4.3.3.1: AssignableVariableCheckerを使用した一元的な判定
+        v4.5: 条件式から配列変数を検出して登録
         
         Args:
             init: 生成された初期化コード
             parsed_data: 解析済みデータ
             lines: 出力行リスト（ローカル変数宣言追加用）
+            condition_expr: 元の条件式（配列変数検出用）
         
         Returns:
             処理後の初期化コード（またはNone）
@@ -345,6 +352,10 @@ class TestFunctionGenerator:
         
         # AssignableVariableCheckerを使用して判定
         checker = AssignableVariableChecker(parsed_data)
+        
+        # v4.5: 条件式から配列変数を検出して登録
+        if condition_expr:
+            checker.detect_array_from_condition(condition_expr)
         
         # 左辺（代入先）が代入可能かチェック
         if not checker.is_assignable(var_part):
@@ -623,8 +634,9 @@ class TestFunctionGenerator:
         Returns:
             初期化コード
         """
-        # 境界値を計算
-        test_value = self.boundary_calc.generate_test_value(condition.expression, truth)
+        # v4.5: parsed_dataを渡してビットフィールド情報を利用
+        test_value = self.boundary_calc.generate_test_value_with_parsed_data(
+            condition.expression, truth, parsed_data)
         
         if test_value:
             # 関数呼び出しが含まれる場合はTODOコメントとしてそのまま返す
