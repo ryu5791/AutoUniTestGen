@@ -247,7 +247,8 @@ class TypedefExtractor:
         source_code = '\n'.join(self.source_lines)
         
         # 方法1: typedef名の直前を検索し、波括弧のバランスを取りながら抽出
-        typedef_with_name = rf'\s+{re.escape(name)}\s*;'
+        # v4.7.1: スペースなし（}TypeName;）パターンにも対応
+        typedef_with_name = rf'[}}\s]{re.escape(name)}\s*;'
         matches = list(re.finditer(typedef_with_name, source_code))
         
         for match in matches:
@@ -357,8 +358,8 @@ class TypedefExtractor:
             end_pos = self._find_typedef_end(source_code, start_pos, name)
             if end_pos > start_pos:
                 definition = source_code[start_pos:end_pos].strip()
-                # 名前で終わることを確認
-                if re.search(rf'\s+{re.escape(name)}\s*;\s*$', definition):
+                # 名前で終わることを確認（v4.7.1: スペースなしパターン対応）
+                if re.search(rf'[}}\s]{re.escape(name)}\s*;\s*$', definition):
                     return definition
         
         return None
@@ -392,7 +393,8 @@ class TypedefExtractor:
                 # セミコロンが見つかり、波括弧が閉じている
                 # この位置の前に目的の名前があるか確認
                 segment = source_code[start_pos:pos+1]
-                if re.search(rf'\s+{re.escape(target_name)}\s*;\s*$', segment):
+                # v4.7.1: スペースなしパターン対応
+                if re.search(rf'[}}\s]{re.escape(target_name)}\s*;\s*$', segment):
                     return pos + 1
             
             pos += 1
@@ -423,8 +425,8 @@ class TypedefExtractor:
                 if end_pos > start_pos:
                     definition = source_code[start_pos:end_pos].strip()
                     
-                    # typedef名を抽出
-                    name_match = re.search(r'\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$', definition)
+                    # typedef名を抽出（v4.7.1: スペースなしパターン対応）
+                    name_match = re.search(r'[}\s]([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$', definition)
                     if name_match:
                         name = name_match.group(1)
                         
