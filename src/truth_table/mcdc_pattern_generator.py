@@ -1,8 +1,13 @@
 """
-MCDCPatternGenerator v3.0
+MCDCPatternGenerator v4.0 (AutoUniTestGen v4.6.0)
 
-条件式をツリー構造として解析し、正確なMC/DCパターンを生成。
+条件式をツリー構造として解析し、最小MC/DCパターンを生成。
 A || B || (C && D) のような複雑な条件に完全対応。
+
+v4.0の変更点:
+- Masking MC/DCの考え方を導入してパターン数を最小化
+- パターン共有を最大化するアルゴリズム（貪欲法）
+- 最小セット選択で n条件 → n+1パターン を達成
 
 MC/DC (Modified Condition/Decision Coverage) の原則:
 - 各条件は、他の条件を固定した状態で、結果に独立して影響を与えることを示す
@@ -16,6 +21,7 @@ import re
 from typing import List, Dict, Tuple, Set, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
+from itertools import combinations
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 from src.utils import setup_logger
@@ -77,14 +83,18 @@ class ConditionNode:
         
         return False
     
+    def evaluate_with_list(self, values: List[bool]) -> bool:
+        """リスト形式の値で評価"""
+        return self.evaluate({i: v for i, v in enumerate(values)})
+    
     def __repr__(self):
         if self.is_leaf():
             return f"Leaf({self.text})"
         return f"{self.operator.value.upper()}({', '.join(repr(c) for c in self.children)})"
 
 
-class MCDCPatternGeneratorV3:
-    """MC/DCパターンジェネレータ v3.0 - ツリー構造ベース"""
+class MCDCPatternGeneratorV4:
+    """MC/DCパターンジェネレータ v4.0 - 最小パターン生成"""
     
     def __init__(self):
         self.logger = setup_logger(__name__)
@@ -170,7 +180,7 @@ class MCDCPatternGeneratorV3:
     
     def generate_mcdc_patterns(self, condition_text: str) -> Tuple[List[str], List[str]]:
         """
-        MC/DCパターンを生成
+        最小MC/DCパターンを生成
         
         Args:
             condition_text: 条件式のテキスト
@@ -185,437 +195,146 @@ class MCDCPatternGeneratorV3:
         self.logger.info(f"条件式をパース: {n}個の葉条件を検出")
         self.logger.debug(f"ツリー構造: {root}")
         
-        patterns_set: Set[Tuple[bool, ...]] = set()
-        
-        # 各葉条件について、その独立性を示すパターンペアを生成
+        # Step 1: 各葉条件の全ての有効な独立性ペア候補を生成
+        all_independence_pairs = []
         for leaf_idx in range(n):
-            pair = self._generate_independence_pair(root, leaf_idx, n)
-            for p in pair:
-                patterns_set.add(tuple(p))
+            pairs = self._find_all_independence_pairs(root, leaf_idx, n)
+            all_independence_pairs.append(pairs)
+            self.logger.debug(f"条件{leaf_idx}の独立性ペア候補: {len(pairs)}組")
+        
+        # Step 2: 貪欲法で最小パターンセットを選択
+        selected_patterns = self._select_minimal_patterns_greedy(
+            all_independence_pairs, n
+        )
         
         # 結果を文字列に変換
-        patterns = sorted(list(patterns_set))
-        pattern_strings = [''.join('T' if v else 'F' for v in p) for p in patterns]
+        pattern_strings = [''.join('T' if v else 'F' for v in p) 
+                          for p in sorted(selected_patterns)]
         leaf_texts = [leaf.text for leaf in leaves]
         
-        self.logger.info(f"生成されたパターン数: {len(pattern_strings)}個")
+        self.logger.info(f"生成されたパターン数: {len(pattern_strings)}個 (最小化済み)")
         
         return pattern_strings, leaf_texts
     
-    def _generate_independence_pair(self, 
-                                    root: ConditionNode, 
-                                    target_leaf_idx: int,
-                                    total: int) -> List[List[bool]]:
-        """
-        特定の葉条件の独立性を示すパターンペアを生成
-        
-        MC/DCでは、各葉条件について：
-        - その条件を True にした時と False にした時で
-        - 全体の結果が変わる
-        - 他の条件は「その条件の影響を判定可能な状態」に固定
-        
-        重要: AND条件内の葉の場合、他の葉をTrueにした状態で
-              自分だけを T/F に変えて結果が変わることを示す
-        
-        Args:
-            root: ルートノード
-            target_leaf_idx: 対象の葉インデックス
-            total: 総葉数
-            
-        Returns:
-            [pattern_true, pattern_false] のリスト
-        """
-        # 対象の葉がTrueの時のパターンを生成
-        pattern_true = [False] * total
-        self._set_pattern_for_true_result(root, target_leaf_idx, pattern_true, 0)
-        
-        # 対象の葉がFalseの時のパターンを生成
-        # ただし、AND条件内の葉の場合は特別な処理が必要
-        pattern_false = [False] * total
-        self._set_pattern_for_false_result_v2(root, target_leaf_idx, pattern_false, 0)
-        
-        return [pattern_true, pattern_false]
-    
-    def _set_pattern_for_false_result_v2(self,
-                                         node: ConditionNode,
-                                         target_leaf_idx: int,
-                                         pattern: List[bool],
-                                         current_idx: int) -> Tuple[int, bool]:
-        """
-        対象の葉=Falseで全体がFalseになるパターンを設定（v2）
-        
-        重要な変更点：
-        - AND条件内の葉の場合、兄弟をTrueにする
-        - これにより、対象の葉だけがFalseで結果に影響することを示せる
-        """
-        if node.is_leaf():
-            is_target = (current_idx == target_leaf_idx)
-            # 対象はFalse（デフォルト）
-            return current_idx + 1, is_target
-        
-        # まず子を走査して、どの子が対象を含むかを調べる
-        idx = current_idx
-        target_child = -1
-        child_ranges = []
-        
-        for i, child in enumerate(node.children):
-            child_start = idx
-            child_leaves = len(child.get_all_leaves())
-            child_end = idx + child_leaves
-            
-            # この子が対象を含むかチェック
-            has_target = (target_leaf_idx >= child_start and target_leaf_idx < child_end)
-            child_ranges.append((child_start, child_end, has_target))
-            if has_target:
-                target_child = i
-            idx = child_end
-        
-        if node.operator == OperatorType.OR:
-            # OR: 全ての子がFalseである必要あり
-            # ただし、対象を含む子がANDの場合は、AND内の他の葉をTrueに
-            if target_child >= 0:
-                child = node.children[target_child]
-                start, _, _ = child_ranges[target_child]
-                if child.operator == OperatorType.AND:
-                    # AND内の対象以外をTrueに設定
-                    self._ensure_subtree_true_except_target(
-                        child, target_leaf_idx, pattern, start
-                    )
-        
-        elif node.operator == OperatorType.AND:
-            # AND: 対象を含む子だけFalseになれば全体がFalse
-            # 他の子はTrueに設定
-            for i, (start, end, has_target) in enumerate(child_ranges):
-                if not has_target:
-                    self._set_subtree_true(node.children[i], pattern, start)
-                else:
-                    # 対象を含む子：AND内なら他の葉をTrueに
-                    child = node.children[i]
-                    if child.operator == OperatorType.AND:
-                        self._ensure_subtree_true_except_target(
-                            child, target_leaf_idx, pattern, start
-                        )
-        
-        return idx, (target_child >= 0)
-    
-    def _set_pattern_for_true_result(self,
-                                     node: ConditionNode,
+    def _find_all_independence_pairs(self, 
+                                     root: ConditionNode,
                                      target_leaf_idx: int,
-                                     pattern: List[bool],
-                                     current_idx: int) -> Tuple[int, bool]:
+                                     total: int) -> List[Tuple[Tuple[bool, ...], Tuple[bool, ...]]]:
         """
-        対象の葉=Trueで全体がTrueになるパターンを設定
+        特定の葉条件の全ての有効な独立性ペアを探索
         
-        OR条件: 対象を含む子だけTrueになればOK、他はFalse
-        AND条件: 全ての子がTrueである必要あり
+        MC/DCの独立性要件:
+        - 対象の条件だけが変わる（T→FまたはF→T）
+        - 他の全ての条件は固定
+        - 全体の結果が変わる
+        
+        Returns:
+            独立性ペアのリスト: [(pattern_true, pattern_false), ...]
+            pattern_true: 対象条件=True のパターン
+            pattern_false: 対象条件=False のパターン（他は同じ）
         """
-        if node.is_leaf():
-            is_target = (current_idx == target_leaf_idx)
-            if is_target:
-                pattern[current_idx] = True  # 対象はTrue
-            return current_idx + 1, is_target
+        valid_pairs = []
         
-        # まず子を走査して、どの子が対象を含むかを調べる
-        idx = current_idx
-        target_child = -1
-        child_ranges = []
-        
-        for i, child in enumerate(node.children):
-            child_start = idx
-            child_leaves = len(child.get_all_leaves())
-            child_end = idx + child_leaves
+        # 全パターンを探索（対象条件=Trueのパターンのみ）
+        for i in range(2 ** total):
+            pattern = [(i >> j) & 1 == 1 for j in range(total)]
             
-            # この子が対象を含むかチェック
-            has_target = (target_leaf_idx >= child_start and target_leaf_idx < child_end)
-            child_ranges.append((child_start, child_end, has_target))
-            if has_target:
-                target_child = i
-            idx = child_end
+            # target_leaf_idx がTrueの場合のみチェック
+            if not pattern[target_leaf_idx]:
+                continue
+            
+            # 全体の結果を評価
+            result_true = root.evaluate_with_list(pattern)
+            
+            # target_leaf_idxだけをFalseに変えた時の結果
+            # 他の条件は全く同じ
+            pattern_false = pattern.copy()
+            pattern_false[target_leaf_idx] = False
+            result_false = root.evaluate_with_list(pattern_false)
+            
+            # 結果が変わる場合、有効な独立性ペア
+            # （対象条件だけが異なり、結果が変わる）
+            if result_true != result_false:
+                valid_pairs.append((
+                    tuple(pattern),
+                    tuple(pattern_false)
+                ))
         
-        if node.operator == OperatorType.OR:
-            # OR: 対象を含む子だけがTrueになればOK
-            # 他の子はFalse（デフォルト）のまま
-            if target_child >= 0:
-                child = node.children[target_child]
-                start, end, _ = child_ranges[target_child]
+        return valid_pairs
+    
+    def _select_minimal_patterns_greedy(self,
+                                        all_independence_pairs: List[List[Tuple[Tuple[bool, ...], Tuple[bool, ...]]]],
+                                        n: int) -> Set[Tuple[bool, ...]]:
+        """
+        貪欲法で最小パターンセットを選択
+        
+        各条件の独立性を示すペアを選択しつつ、パターンの共有を最大化
+        
+        選択基準（優先順位）:
+        1. 新規パターン数が最小
+        2. 既存パターンを多く再利用するペア
+        """
+        # 選択されたパターンの集合
+        selected_patterns: Set[Tuple[bool, ...]] = set()
+        
+        # 条件の優先順位を決定（ペア候補が少ない順）
+        condition_order = sorted(
+            range(n),
+            key=lambda i: len(all_independence_pairs[i])
+        )
+        
+        for cond_idx in condition_order:
+            pairs = all_independence_pairs[cond_idx]
+            
+            if not pairs:
+                self.logger.warning(f"条件{cond_idx}に有効な独立性ペアがありません")
+                continue
+            
+            # 既存パターンとの共有を最大化するペアを選択
+            best_pair_idx = -1
+            best_new_count = float('inf')
+            best_reuse_count = -1  # 再利用数（多いほど良い）
+            
+            for pair_idx, (pat_true, pat_false) in enumerate(pairs):
+                # 新しく追加が必要なパターン数をカウント
+                new_count = 0
+                reuse_count = 0  # 既存パターンの再利用数
                 
-                # 対象の葉をTrueに設定
-                pattern[target_leaf_idx] = True
+                if pat_true not in selected_patterns:
+                    new_count += 1
+                else:
+                    reuse_count += 1
                 
-                # 対象を含む子がANDなら、対象以外もTrueにする必要あり
-                if child.operator == OperatorType.AND:
-                    self._ensure_subtree_true_except_target(
-                        child, target_leaf_idx, pattern, start
-                    )
-        
-        elif node.operator == OperatorType.AND:
-            # AND: 全ての子がTrueである必要あり
-            # 対象を含まない子は全てTrueに設定
-            for i, (start, end, has_target) in enumerate(child_ranges):
-                if not has_target:
-                    self._set_subtree_true(node.children[i], pattern, start)
+                if pat_false not in selected_patterns:
+                    new_count += 1
                 else:
-                    # 対象を含む子：対象はTrue、ANDなら他もTrue
-                    pattern[target_leaf_idx] = True
-                    child = node.children[i]
-                    if child.operator == OperatorType.AND:
-                        self._ensure_subtree_true_except_target(
-                            child, target_leaf_idx, pattern, start
-                        )
-                    elif child.operator == OperatorType.OR:
-                        # ORの中の対象：他はFalseでOK
-                        pass
-        
-        return idx, (target_child >= 0)
-    
-    def _set_pattern_for_false_result(self,
-                                      node: ConditionNode,
-                                      target_leaf_idx: int,
-                                      pattern: List[bool],
-                                      current_idx: int) -> Tuple[int, bool]:
-        """
-        対象の葉=Falseで全体がFalseになるパターンを設定
-        
-        OR条件: 全ての子がFalseである必要あり → 全てFalse
-        AND条件: 1つでもFalseなら全体がFalse → 対象だけFalse、他はTrue
-        """
-        if node.is_leaf():
-            is_target = (current_idx == target_leaf_idx)
-            # 対象ならFalse（デフォルト）
-            return current_idx + 1, is_target
-        
-        # まず子を走査して、どの子が対象を含むかを調べる
-        idx = current_idx
-        target_child = -1
-        child_ranges = []
-        
-        for i, child in enumerate(node.children):
-            child_start = idx
-            child_leaves = len(child.get_all_leaves())
-            child_end = idx + child_leaves
+                    reuse_count += 1
+                
+                # 選択基準: 新規パターン数が少ない > 再利用数が多い
+                if (new_count < best_new_count or 
+                    (new_count == best_new_count and reuse_count > best_reuse_count)):
+                    best_new_count = new_count
+                    best_reuse_count = reuse_count
+                    best_pair_idx = pair_idx
             
-            # この子が対象を含むかチェック
-            has_target = (target_leaf_idx >= child_start and target_leaf_idx < child_end)
-            child_ranges.append((child_start, child_end, has_target))
-            if has_target:
-                target_child = i
-            idx = child_end
+            # 最良のペアを選択
+            if best_pair_idx >= 0:
+                pat_true, pat_false = pairs[best_pair_idx]
+                selected_patterns.add(pat_true)
+                selected_patterns.add(pat_false)
         
-        if node.operator == OperatorType.OR:
-            # OR: 全ての子がFalseである必要あり
-            # 全てFalseのまま（デフォルト）
-            pass
-        
-        elif node.operator == OperatorType.AND:
-            # AND: 対象を含む子だけFalseになれば全体がFalse
-            # 他の子はTrueに設定
-            for i, (start, end, has_target) in enumerate(child_ranges):
-                if not has_target:
-                    self._set_subtree_true(node.children[i], pattern, start)
-        
-        return idx, (target_child >= 0)
+        return selected_patterns
     
-    def _ensure_subtree_true_except_target(self,
-                                           node: ConditionNode,
-                                           target_leaf_idx: int,
-                                           pattern: List[bool],
-                                           current_idx: int) -> int:
-        """
-        対象の葉以外をTrueに設定（ANDの内部で使用）
-        """
-        if node.is_leaf():
-            if current_idx != target_leaf_idx:
-                pattern[current_idx] = True
-            return current_idx + 1
-        
-        idx = current_idx
-        for child in node.children:
-            idx = self._ensure_subtree_true_except_target(
-                child, target_leaf_idx, pattern, idx
-            )
-        return idx
+    # ===== 後方互換性のためのメソッド =====
     
-    def _set_context_for_leaf(self,
-                              node: ConditionNode,
-                              target_leaf_idx: int,
-                              pattern: List[bool],
-                              current_leaf_idx: int,
-                              target_value: bool) -> Tuple[int, bool]:
-        """後方互換のため残す（未使用）"""
-        return current_leaf_idx, False
-    
-    def _set_subtree_true(self, 
-                          node: ConditionNode, 
-                          pattern: List[bool], 
-                          start_idx: int) -> int:
-        """
-        サブツリー全体をTrue（評価がTrueになる最小限の設定）に
-        
-        OR: 1つだけTrueで十分
-        AND: 全てTrue
-        葉: True
-        """
-        if node.is_leaf():
-            pattern[start_idx] = True
-            return start_idx + 1
-        
-        idx = start_idx
-        if node.operator == OperatorType.OR:
-            # 最初の1つだけTrue
-            for i, child in enumerate(node.children):
-                if i == 0:
-                    idx = self._set_subtree_true(child, pattern, idx)
-                else:
-                    idx += len(child.get_all_leaves())
-        
-        elif node.operator == OperatorType.AND:
-            # 全てTrue
-            for child in node.children:
-                idx = self._set_subtree_true(child, pattern, idx)
-        
-        return idx
-    
-    def _generate_patterns_recursive(self, 
-                                     node: ConditionNode, 
-                                     start_idx: int, 
-                                     total: int,
-                                     patterns: Set[Tuple[bool, ...]]) -> int:
-        """後方互換のため残す（未使用）"""
-        return 0
-    
-    def _generate_or_patterns(self,
-                             node: ConditionNode,
-                             start_idx: int,
-                             total: int,
-                             child_ranges: List[Tuple[int, int]],
-                             patterns: Set[Tuple[bool, ...]]) -> None:
-        """
-        OR条件のMC/DCパターンを生成
-        
-        OR条件では:
-        - 全てFalseのベースケース
-        - 各子条件を1つずつTrueにして全体をTrueにする（他はFalse）
-        """
-        n_children = len(node.children)
-        
-        # パターン1: 全ての子条件がFalse → 全体False
-        base_false = [False] * total
-        patterns.add(tuple(base_false))
-        
-        # パターン2-N: 各子条件を1つだけTrueにする
-        for i, child in enumerate(node.children):
-            pattern = [False] * total
-            child_start, child_end = child_ranges[i]
-            
-            # この子条件をTrueにする
-            self._set_child_true(pattern, child, child_start)
-            
-            patterns.add(tuple(pattern))
-    
-    def _generate_and_patterns(self,
-                               node: ConditionNode,
-                               start_idx: int,
-                               total: int,
-                               child_ranges: List[Tuple[int, int]],
-                               patterns: Set[Tuple[bool, ...]]) -> None:
-        """
-        AND条件のMC/DCパターンを生成
-        
-        AND条件では:
-        - 全てTrueのベースケース
-        - 各子条件を1つずつFalseにして全体をFalseにする（他はTrue）
-        
-        注意: このノードの範囲外の値は、親の文脈によって決まる
-        （親から呼ばれた時点で、このノード範囲外は適切に設定済み）
-        """
-        # このノードの範囲を取得
-        node_start = start_idx
-        node_end = child_ranges[-1][1] if child_ranges else start_idx
-        
-        # パターン1: 全ての子条件がTrue → 全体True
-        # このノード範囲内のみTrueに設定
-        base_true = [False] * total
-        for child_start, child_end in child_ranges:
-            for i in range(child_start, child_end):
-                base_true[i] = True
-        patterns.add(tuple(base_true))
-        
-        # パターン2-N: 各子条件を1つだけFalseにする
-        for i, child in enumerate(node.children):
-            pattern = [False] * total
-            # まず全ての子をTrueに設定
-            for j, (cs, ce) in enumerate(child_ranges):
-                for idx in range(cs, ce):
-                    pattern[idx] = True
-            
-            child_start, child_end = child_ranges[i]
-            
-            # この子条件をFalseにする
-            self._set_child_false(pattern, child, child_start)
-            
-            patterns.add(tuple(pattern))
-    
-    def _create_all_true_pattern(self, node: ConditionNode, total: int, start_idx: int) -> List[bool]:
-        """全ての葉がTrueになるパターンを作成"""
-        pattern = [False] * total
-        leaves = node.get_all_leaves()
-        for i in range(len(leaves)):
-            pattern[start_idx + i] = True
-        return pattern
-    
-    def _set_child_true(self, pattern: List[bool], child: ConditionNode, start_idx: int) -> None:
-        """
-        子条件をTrueになるように設定
-        - 葉: そのインデックスをTrue
-        - AND: 全てTrue
-        - OR: 最初の1つをTrue
-        """
-        if child.is_leaf():
-            pattern[start_idx] = True
-        elif child.operator == OperatorType.AND:
-            # ANDは全てTrueが必要
-            for i, leaf in enumerate(child.get_all_leaves()):
-                pattern[start_idx + i] = True
-        elif child.operator == OperatorType.OR:
-            # ORは1つTrueで十分
-            # 最初の葉をTrueにする
-            pattern[start_idx] = True
-    
-    def _set_child_false(self, pattern: List[bool], child: ConditionNode, start_idx: int) -> None:
-        """
-        子条件をFalseになるように設定
-        - 葉: そのインデックスをFalse
-        - AND: 1つFalseで十分
-        - OR: 全てFalse
-        """
-        if child.is_leaf():
-            pattern[start_idx] = False
-        elif child.operator == OperatorType.AND:
-            # ANDは1つFalseで十分
-            pattern[start_idx] = False
-        elif child.operator == OperatorType.OR:
-            # ORは全てFalseが必要
-            for i, leaf in enumerate(child.get_all_leaves()):
-                pattern[start_idx + i] = False
-    
-    # 後方互換性のためのメソッド
     def generate_mcdc_patterns_for_complex(self,
                                           top_operator: str,
                                           conditions: List[str]) -> List[str]:
         """
         複雑な条件のMC/DCパターンを生成（後方互換）
-        
-        Args:
-            top_operator: 'and' or 'or'
-            conditions: 条件のリスト
-            
-        Returns:
-            パターンのリスト
         """
-        # 条件を結合して1つの式にする
         op_str = ' || ' if top_operator == 'or' else ' && '
         combined = op_str.join(f'({c})' for c in conditions)
-        
         patterns, _ = self.generate_mcdc_patterns(combined)
         return patterns
     
@@ -650,73 +369,226 @@ class MCDCPatternGeneratorV3:
             return ['T', 'F']
 
 
+class MCDCPatternGeneratorV3:
+    """MC/DCパターンジェネレータ v3.0 - ツリー構造ベース（後方互換）"""
+    
+    def __init__(self):
+        self.logger = setup_logger(__name__)
+        # V4にデリゲート
+        self._v4 = MCDCPatternGeneratorV4()
+    
+    def parse_condition(self, condition_text: str) -> ConditionNode:
+        return self._v4.parse_condition(condition_text)
+    
+    def generate_mcdc_patterns(self, condition_text: str) -> Tuple[List[str], List[str]]:
+        return self._v4.generate_mcdc_patterns(condition_text)
+    
+    def generate_mcdc_patterns_for_complex(self,
+                                          top_operator: str,
+                                          conditions: List[str]) -> List[str]:
+        return self._v4.generate_mcdc_patterns_for_complex(top_operator, conditions)
+    
+    def generate_or_patterns(self, n_conditions: int = 2) -> List[str]:
+        return self._v4.generate_or_patterns(n_conditions)
+    
+    def generate_and_patterns(self, n_conditions: int = 2) -> List[str]:
+        return self._v4.generate_and_patterns(n_conditions)
+
+
 # エイリアス（後方互換）
-MCDCPatternGenerator = MCDCPatternGeneratorV3
+MCDCPatternGenerator = MCDCPatternGeneratorV4
 
 
 if __name__ == "__main__":
-    print("=== MCDCPatternGenerator v3.0 のテスト ===\n")
+    print("=== MCDCPatternGenerator v4.0 のテスト ===\n")
     
-    gen = MCDCPatternGeneratorV3()
+    gen = MCDCPatternGeneratorV4()
     
-    # テスト1: A || B || (C && D)
-    print("テスト1: A || B || (C && D)")
+    def verify_mcdc(expr: str, patterns: List[str]) -> Tuple[bool, List[str]]:
+        """MC/DC達成を検証し、各条件の独立性ペアを返す"""
+        root = gen.parse_condition(expr)
+        leaves = root.get_all_leaves()
+        n = len(leaves)
+        
+        # パターンをタプルに変換
+        pattern_tuples = set()
+        for p in patterns:
+            pattern_tuples.add(tuple(c == 'T' for c in p))
+        
+        # 各条件の独立性が示されているか確認
+        independence_info = []
+        all_found = True
+        for target_idx in range(n):
+            found = False
+            found_pair = None
+            for pat1 in pattern_tuples:
+                for pat2 in pattern_tuples:
+                    # 対象条件だけが異なるかチェック
+                    differs_only_target = True
+                    target_differs = False
+                    for i in range(n):
+                        if i == target_idx:
+                            if pat1[i] != pat2[i]:
+                                target_differs = True
+                        else:
+                            if pat1[i] != pat2[i]:
+                                differs_only_target = False
+                                break
+                    
+                    if differs_only_target and target_differs:
+                        # 結果が変わるかチェック
+                        r1 = root.evaluate_with_list(list(pat1))
+                        r2 = root.evaluate_with_list(list(pat2))
+                        if r1 != r2:
+                            found = True
+                            p1_str = ''.join('T' if v else 'F' for v in pat1)
+                            p2_str = ''.join('T' if v else 'F' for v in pat2)
+                            found_pair = f"{p1_str} ↔ {p2_str}"
+                            break
+                if found:
+                    break
+            
+            if found:
+                independence_info.append(f"  条件{target_idx} ({leaves[target_idx].text}): {found_pair} ✓")
+            else:
+                independence_info.append(f"  条件{target_idx} ({leaves[target_idx].text}): 独立性なし ✗")
+                all_found = False
+        
+        return all_found, independence_info
+    
+    # テスト1: a || (b && c) - 引継ぎ資料の主要テスト
+    print("テスト1: a || (b && c)")
     print("-" * 50)
     
-    test_expr = "(A == 0) || (B == 3) || ((C == 1) && (D != 0))"
+    test_expr = "a || (b && c)"
     patterns, leaves = gen.generate_mcdc_patterns(test_expr)
     
     print(f"葉条件: {leaves}")
-    print(f"パターン数: {len(patterns)}")
+    print(f"パターン数: {len(patterns)} (期待: 4)")
     for i, p in enumerate(patterns, 1):
         print(f"  {i}. {p}")
     
-    print("\n期待されるパターン (MC/DC完全版):")
-    expected = [
-        "FFFF",  # 全False → 結果False (基準)
-        "TFFF",  # A=T → 結果True (Aの独立性)
-        "FTFF",  # B=T → 結果True (Bの独立性)
-        "FFTF",  # C=T, D=F → 結果False (Cの独立性 - FFTTと比較)
-        "FFFT",  # C=F, D=T → 結果False (Dの独立性 - FFTTと比較)
-        "FFTT",  # C=T, D=T → 結果True (C&&D = True)
-    ]
-    print(f"  {expected}")
+    mcdc_ok, info = verify_mcdc(test_expr, patterns)
+    print("\n独立性ペア:")
+    for line in info:
+        print(line)
+    match1 = len(patterns) == 4 and mcdc_ok
+    print(f"\nMC/DC達成: {'✓' if match1 else '✗'}")
     
-    # 検証
-    print("\n検証:")
-    for exp in expected:
-        status = "✓" if exp in patterns else "✗"
-        print(f"  {exp}: {status}")
-    
-    # 余分なパターン
-    extra = [p for p in patterns if p not in expected]
-    if extra:
-        print(f"\n余分なパターン: {extra}")
-    
-    # テスト2: (A && B) || C
+    # テスト2: a && b
     print("\n" + "=" * 50)
-    print("テスト2: (A && B) || C")
+    print("テスト2: a && b")
     print("-" * 50)
     
-    test_expr2 = "((A == 1) && (B == 2)) || (C == 3)"
-    patterns2, leaves2 = gen.generate_mcdc_patterns(test_expr2)
+    patterns2, _ = gen.generate_mcdc_patterns("a && b")
+    expected2 = ['FT', 'TF', 'TT']
+    print(f"パターン: {patterns2}")
+    print(f"期待: {expected2}")
+    match2 = set(patterns2) == set(expected2)
+    print(f"一致: {'✓' if match2 else '✗'}")
     
-    print(f"葉条件: {leaves2}")
-    print(f"パターン数: {len(patterns2)}")
-    for i, p in enumerate(patterns2, 1):
-        print(f"  {i}. {p}")
-    
-    # テスト3: A && (B || C || D || E || F || G) && H
+    # テスト3: a || b
     print("\n" + "=" * 50)
-    print("テスト3: A && (B || C || D || E || F || G) && H")
+    print("テスト3: a || b")
     print("-" * 50)
     
-    test_expr3 = "(A == 1) && ((B == 1) || (C == 2) || (D == 3) || (E == 4) || (F == 5) || (G == 6)) && (H == 0)"
-    patterns3, leaves3 = gen.generate_mcdc_patterns(test_expr3)
+    patterns3, _ = gen.generate_mcdc_patterns("a || b")
+    expected3 = ['FF', 'FT', 'TF']
+    print(f"パターン: {patterns3}")
+    print(f"期待: {expected3}")
+    match3 = set(patterns3) == set(expected3)
+    print(f"一致: {'✓' if match3 else '✗'}")
     
-    print(f"葉条件: {len(leaves3)}個")
-    print(f"パターン数: {len(patterns3)}")
-    for i, p in enumerate(patterns3, 1):
+    # テスト4: (a && b) || c
+    print("\n" + "=" * 50)
+    print("テスト4: (a && b) || c")
+    print("-" * 50)
+    
+    test_expr4 = "(a && b) || c"
+    patterns4, _ = gen.generate_mcdc_patterns(test_expr4)
+    print(f"パターン数: {len(patterns4)} (期待: 4)")
+    print(f"パターン: {patterns4}")
+    mcdc_ok4, info4 = verify_mcdc(test_expr4, patterns4)
+    print("\n独立性ペア:")
+    for line in info4:
+        print(line)
+    match4 = len(patterns4) == 4 and mcdc_ok4
+    print(f"\nMC/DC達成: {'✓' if match4 else '✗'}")
+    
+    # テスト5: a || b || c
+    print("\n" + "=" * 50)
+    print("テスト5: a || b || c")
+    print("-" * 50)
+    
+    patterns5, _ = gen.generate_mcdc_patterns("a || b || c")
+    expected5 = ['FFF', 'FFT', 'FTF', 'TFF']
+    print(f"パターン: {patterns5}")
+    print(f"期待: {expected5}")
+    match5 = set(patterns5) == set(expected5)
+    print(f"一致: {'✓' if match5 else '✗'}")
+    
+    # テスト6: a && b && c
+    print("\n" + "=" * 50)
+    print("テスト6: a && b && c")
+    print("-" * 50)
+    
+    patterns6, _ = gen.generate_mcdc_patterns("a && b && c")
+    expected6 = ['FTT', 'TFT', 'TTF', 'TTT']
+    print(f"パターン: {patterns6}")
+    print(f"期待: {expected6}")
+    match6 = set(patterns6) == set(expected6)
+    print(f"一致: {'✓' if match6 else '✗'}")
+    
+    # テスト7: a || (b && (c || d)) - 4条件テスト
+    print("\n" + "=" * 50)
+    print("テスト7: a || (b && (c || d))")
+    print("-" * 50)
+    
+    test_expr7 = "a || (b && (c || d))"
+    patterns7, leaves7 = gen.generate_mcdc_patterns(test_expr7)
+    print(f"葉条件: {leaves7}")
+    print(f"パターン数: {len(patterns7)} (期待: 5)")
+    for i, p in enumerate(patterns7, 1):
         print(f"  {i}. {p}")
     
-    print("\n✓ テスト完了")
+    mcdc_ok7, info7 = verify_mcdc(test_expr7, patterns7)
+    print("\n独立性ペア:")
+    for line in info7:
+        print(line)
+    match7 = len(patterns7) == 5 and mcdc_ok7
+    print(f"\nMC/DC達成: {'✓' if match7 else '✗'}")
+    
+    # テスト8: A || B || (C && D) - 実際の難読化コードで使われる形式
+    print("\n" + "=" * 50)
+    print("テスト8: A || B || (C && D)")
+    print("-" * 50)
+    
+    test_expr8 = "(A == 0) || (B == 3) || ((C == 1) && (D != 0))"
+    patterns8, leaves8 = gen.generate_mcdc_patterns(test_expr8)
+    
+    print(f"葉条件: {leaves8}")
+    print(f"パターン数: {len(patterns8)} (期待: 5)")
+    for i, p in enumerate(patterns8, 1):
+        print(f"  {i}. {p}")
+    
+    mcdc_ok8, info8 = verify_mcdc(test_expr8, patterns8)
+    print("\n独立性ペア:")
+    for line in info8:
+        print(line)
+    match8 = len(patterns8) == 5 and mcdc_ok8
+    print(f"\nMC/DC達成: {'✓' if match8 else '✗'}")
+    
+    # 総合結果
+    print("\n" + "=" * 50)
+    print("総合結果")
+    print("-" * 50)
+    all_pass = all([match1, match2, match3, match4, match5, match6, match7, match8])
+    print(f"テスト1 (a || (b && c)): {'✓' if match1 else '✗'}")
+    print(f"テスト2 (a && b): {'✓' if match2 else '✗'}")
+    print(f"テスト3 (a || b): {'✓' if match3 else '✗'}")
+    print(f"テスト4 ((a && b) || c): {'✓' if match4 else '✗'}")
+    print(f"テスト5 (a || b || c): {'✓' if match5 else '✗'}")
+    print(f"テスト6 (a && b && c): {'✓' if match6 else '✗'}")
+    print(f"テスト7 (a || (b && (c || d))): {'✓' if match7 else '✗'}")
+    print(f"テスト8 (A || B || (C && D)): {'✓' if match8 else '✗'}")
+    print(f"\n全テスト: {'✓ PASS' if all_pass else '✗ FAIL'}")
