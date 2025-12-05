@@ -185,6 +185,18 @@ class CCodeParser:
             )
             self.logger.info(f"{len(local_variables)}個のローカル変数を抽出しました")
             
+            # 11.9. v4.7: 関数ポインタテーブルを抽出
+            function_pointer_tables = self.variable_extractor.extract_function_pointer_tables(code)
+            self.logger.info(f"{len(function_pointer_tables)}個の関数ポインタテーブルを抽出しました")
+            
+            # 11.10. v4.7: 関数ポインタテーブル内の関数を外部関数として追加登録
+            table_functions, table_signatures = self._register_function_table_entries(
+                function_pointer_tables, function_signatures
+            )
+            external_functions = list(set(external_functions) | table_functions)
+            function_signatures.update(table_signatures)
+            self.logger.info(f"関数ポインタテーブルから{len(table_functions)}個の関数を登録しました")
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -202,7 +214,8 @@ class CCodeParser:
                 macro_definitions=macro_definitions,  # v2.4.2: 追加
                 struct_definitions=struct_definitions,  # v2.8.0: 追加
                 function_signatures=function_signatures,  # v4.0: 追加
-                local_variables=local_variables  # v4.2.0: 追加
+                local_variables=local_variables,  # v4.2.0: 追加
+                function_pointer_tables=function_pointer_tables  # v4.7: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
@@ -330,8 +343,13 @@ class CCodeParser:
                     self.in_target_function = False
             
             def visit_FuncCall(self, node):
-                if self.in_target_function and hasattr(node.name, 'name'):
-                    self.function_calls.add(node.name.name)
+                if self.in_target_function:
+                    # 通常の関数呼び出し（node.name が ID の場合）
+                    if hasattr(node.name, 'name'):
+                        self.function_calls.add(node.name.name)
+                    # 配列経由の関数ポインタ呼び出し（node.name が ArrayRef の場合）
+                    # p_event_ctrldet_first[index](param) のような場合はスキップ
+                    # （テーブル内の関数は別途登録される）
                 self.generic_visit(node)
         
         visitor = FunctionCallVisitor(target_function)
@@ -354,6 +372,9 @@ class CCodeParser:
             functions = functions - function_macro_names
         
         # v4.0.1: 標準ライブラリ関数を除外
+        # v4.7: 非文字列（ASTノード等）をフィルタリング
+        functions = {f for f in functions if isinstance(f, str)}
+        
         if source_code:
             try:
                 from src.parser.stdlib_function_extractor import StdlibFunctionExtractor
@@ -718,6 +739,57 @@ class CCodeParser:
         
         self.logger.info(f"ローカル変数抽出完了: {list(local_vars.keys())}")
         return local_vars
+    
+    def _register_function_table_entries(self, tables: List, 
+                                          existing_signatures: Dict[str, FunctionSignature]
+                                         ) -> tuple:
+        """
+        関数ポインタテーブル内の関数を外部関数として登録 (v4.7新規)
+        
+        Args:
+            tables: 関数ポインタテーブルのリスト
+            existing_signatures: 既存の関数シグネチャ辞書
+        
+        Returns:
+            (追加された関数名のセット, 新しいシグネチャ辞書)
+        """
+        new_functions = set()
+        new_signatures = {}
+        
+        for table in tables:
+            for func_name in table.functions:
+                # 既に登録されていない場合のみ追加
+                if func_name not in existing_signatures:
+                    # パラメータリストを解析
+                    parameters = []
+                    if table.params and table.params != 'void':
+                        param_parts = table.params.split(',')
+                        for i, part in enumerate(param_parts):
+                            part = part.strip()
+                            if part:
+                                # "uint8_t i" -> {"type": "uint8_t", "name": "i"}
+                                words = part.split()
+                                if len(words) >= 2:
+                                    ptype = ' '.join(words[:-1])
+                                    pname = words[-1]
+                                else:
+                                    ptype = words[0] if words else 'int'
+                                    pname = f'arg{i}'
+                                parameters.append({'type': ptype, 'name': pname})
+                    
+                    # シグネチャを作成
+                    signature = FunctionSignature(
+                        name=func_name,
+                        return_type=table.return_type,
+                        parameters=parameters,
+                        is_static=table.storage == 'static'
+                    )
+                    new_signatures[func_name] = signature
+                    self.logger.debug(f"関数ポインタテーブル {table.name} から関数を登録: {func_name}")
+                
+                new_functions.add(func_name)
+        
+        return new_functions, new_signatures
 
 
 if __name__ == "__main__":

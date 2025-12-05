@@ -394,6 +394,42 @@ class StructDefinition:
 
 
 @dataclass
+class FunctionPointerTable:
+    """関数ポインタテーブル情報 (v4.7で追加)"""
+    name: str                              # テーブル名
+    storage: str                           # static/extern/なし
+    return_type: str                       # 戻り値の型
+    params: str                            # パラメータリスト（文字列）
+    param_types: List[str] = field(default_factory=list)  # パラメータの型リスト
+    functions: List[str] = field(default_factory=list)    # 登録されている関数名
+    size: Optional[int] = None             # 配列サイズ（指定がある場合）
+    line_number: int = 0                   # ソースコード内の行番号
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'storage': self.storage,
+            'return_type': self.return_type,
+            'params': self.params,
+            'param_types': self.param_types,
+            'functions': self.functions,
+            'size': self.size,
+            'line_number': self.line_number
+        }
+    
+    def format_declaration(self) -> str:
+        """テーブル宣言を生成"""
+        storage_prefix = f"{self.storage} " if self.storage else ""
+        return f"{storage_prefix}{self.return_type} (*{self.name}[])({self.params})"
+    
+    def format_definition(self) -> str:
+        """テーブル定義全体を生成（初期化子付き）"""
+        decl = self.format_declaration()
+        func_refs = ",\n    ".join(f"&{func}" for func in self.functions)
+        return f"{decl} = {{\n    {func_refs}\n}};"
+
+
+@dataclass
 class ParsedData:
     """C言語解析結果データ"""
     file_name: str
@@ -412,6 +448,7 @@ class ParsedData:
     struct_definitions: List[StructDefinition] = field(default_factory=list)  # v2.8.0: 構造体定義
     function_signatures: Dict[str, 'FunctionSignature'] = field(default_factory=dict)  # v4.0: 関数シグネチャ
     local_variables: Dict[str, 'LocalVariableInfo'] = field(default_factory=dict)  # v4.2.0: ローカル変数情報
+    function_pointer_tables: List['FunctionPointerTable'] = field(default_factory=list)  # v4.7: 関数ポインタテーブル
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """
@@ -450,7 +487,8 @@ class ParsedData:
             'macros': self.macros,
             'macro_definitions': self.macro_definitions,
             'struct_definitions': [s.to_dict() for s in self.struct_definitions],
-            'function_signatures': {k: v.to_dict() for k, v in self.function_signatures.items()}  # v4.0
+            'function_signatures': {k: v.to_dict() for k, v in self.function_signatures.items()},  # v4.0
+            'function_pointer_tables': [t.to_dict() for t in self.function_pointer_tables]  # v4.7
         }
 
 

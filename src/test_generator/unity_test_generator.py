@@ -374,6 +374,16 @@ class UnityTestGenerator:
                 lines.append("// 外部変数が検出されませんでした")
         else:
             lines.append("// 外部変数が検出されませんでした")
+        lines.append("")
+        
+        # v4.7: 関数ポインタテーブルの定義を追加
+        if parsed_data and parsed_data.function_pointer_tables:
+            lines.append("// ===== 関数ポインタテーブル =====")
+            for table in parsed_data.function_pointer_tables:
+                lines.append(f"/* 関数ポインタテーブル: {table.name} ({table.size}個の関数) */")
+                lines.append(table.format_definition())
+                lines.append("")
+            self.logger.info(f"関数ポインタテーブルを {len(parsed_data.function_pointer_tables)} 個生成しました")
         
         return '\n'.join(lines)
     

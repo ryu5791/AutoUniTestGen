@@ -2,6 +2,7 @@
 VariableDeclExtractorモジュール
 
 テスト対象関数で使用される変数宣言を抽出する
+v4.7: 関数ポインタテーブルの抽出機能を追加
 """
 
 import re
@@ -334,3 +335,93 @@ class VariableDeclExtractor:
                 return True
         
         return False
+    
+    def extract_function_pointer_tables(self, source_code: str) -> List[Dict]:
+        """
+        関数ポインタテーブルを抽出 (v4.7新規)
+        
+        パターン例:
+        static void (*p_event_ctrldet_first[])(uint8_t i) = {
+            &event_open_ctrldet,
+            &event_close_ctrldet,
+        };
+        
+        Args:
+            source_code: ソースコード
+        
+        Returns:
+            関数ポインタテーブル情報のリスト
+        """
+        from src.data_structures import FunctionPointerTable
+        
+        tables = []
+        
+        # 正規表現パターン（複数行対応）
+        # [storage] return_type (*name[])(params) = { &func1, &func2, ... };
+        pattern = re.compile(r'''
+            (?P<storage>static\s+|extern\s+)?      # ストレージクラス (optional)
+            (?P<return_type>\w+(?:\s*\*)?)\s*      # 戻り値型（ポインタ含む）
+            \(\s*\*\s*                              # (*
+            (?P<tblname>\w+)                          # 配列名
+            \s*\[\s*(?P<size>\d*)\s*\]\s*\)        # [サイズ])
+            \s*\(\s*(?P<params>[^)]*)\s*\)         # (パラメータ)
+            \s*=\s*\{                               # = {
+            (?P<init>[^}]+)                        # 初期化子
+            \}                                      # }
+        ''', re.VERBOSE | re.MULTILINE)
+        
+        # 関数参照パターン（&func または func）
+        func_ref_pattern = re.compile(r'&?\s*(\w+)')
+        
+        for match in pattern.finditer(source_code):
+            storage = (match.group('storage') or '').strip()
+            return_type = match.group('return_type').strip()
+            name = match.group('tblname').strip()
+            size_str = match.group('size').strip()
+            params = match.group('params').strip()
+            init_list = match.group('init')
+            
+            # 初期化子から関数名を抽出
+            functions = []
+            for func_match in func_ref_pattern.finditer(init_list):
+                func_name = func_match.group(1).strip()
+                # 数値やコメント除去
+                if func_name and not func_name.isdigit() and func_name not in ['NULL', 'null']:
+                    functions.append(func_name)
+            
+            # 配列サイズ
+            size = int(size_str) if size_str else len(functions)
+            
+            # パラメータ型リストを解析
+            param_types = []
+            if params and params != 'void':
+                for param in params.split(','):
+                    param = param.strip()
+                    if param:
+                        # "uint8_t i" -> "uint8_t"
+                        parts = param.split()
+                        if len(parts) >= 1:
+                            # 最後の単語は変数名の可能性が高い
+                            if len(parts) > 1:
+                                param_types.append(' '.join(parts[:-1]))
+                            else:
+                                param_types.append(parts[0])
+            
+            # 行番号を取得
+            line_number = source_code[:match.start()].count('\n') + 1
+            
+            table = FunctionPointerTable(
+                name=name,
+                storage=storage,
+                return_type=return_type,
+                params=params,
+                param_types=param_types,
+                functions=functions,
+                size=size,
+                line_number=line_number
+            )
+            
+            tables.append(table)
+            self.logger.info(f"関数ポインタテーブルを検出: {name} ({len(functions)}個の関数)")
+        
+        return tables
