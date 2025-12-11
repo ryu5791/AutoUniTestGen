@@ -240,7 +240,9 @@ class ConditionExtractor(c_ast.NodeVisitor):
     
     def _extract_switch_cases(self, switch_node: c_ast.Switch) -> List:
         """
-        switch文からcase値を抽出
+        switch文からcase値を抽出（直接の子caseのみ、ネストしたswitchのcaseは除外）
+        
+        v4.7.2: ネストしたswitch文のcaseが混入するバグを修正
         
         Args:
             switch_node: switchのASTノード
@@ -256,12 +258,30 @@ class ConditionExtractor(c_ast.NodeVisitor):
                     # case値を文字列化
                     case_value = self._node_to_str(node.expr)
                     cases.append(case_value)
+                # caseのstmts内を探索（ただし内側のswitchは除外）
+                if node.stmts:
+                    for stmt in node.stmts:
+                        # 内側のSwitch文は除外（そのswitchは別途独立して処理される）
+                        if not isinstance(stmt, c_ast.Switch):
+                            visit_cases(stmt)
             elif isinstance(node, c_ast.Default):
                 cases.append('default')
-            
-            # 子ノードを再帰的に探索
-            for child in node:
-                visit_cases(child)
+                # defaultのstmts内を探索（ただし内側のswitchは除外）
+                if node.stmts:
+                    for stmt in node.stmts:
+                        if not isinstance(stmt, c_ast.Switch):
+                            visit_cases(stmt)
+            elif isinstance(node, c_ast.Compound):
+                # Compound内を探索（ただし内側のswitchは除外）
+                if node.block_items:
+                    for item in node.block_items:
+                        if not isinstance(item, c_ast.Switch):
+                            visit_cases(item)
+            else:
+                # その他のノードは子を探索（ただし内側のswitchは除外）
+                for child in node:
+                    if not isinstance(child, c_ast.Switch):
+                        visit_cases(child)
         
         if switch_node.stmt:
             visit_cases(switch_node.stmt)
