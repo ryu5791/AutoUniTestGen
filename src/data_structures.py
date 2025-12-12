@@ -50,13 +50,15 @@ class TestCase:
     comment: str = ""
     input_values: Dict[str, Any] = field(default_factory=dict)
     output_values: Dict[str, Any] = field(default_factory=dict)
+    leaf_texts: List[str] = field(default_factory=list)  # 葉条件のテキストリスト（MC/DC用）
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'no': self.no,
             'truth': self.truth,
             'condition': self.condition,
-            'expected': self.expected
+            'expected': self.expected,
+            'leaf_texts': self.leaf_texts
         }
 
 

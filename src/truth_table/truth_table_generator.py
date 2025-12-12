@@ -138,12 +138,16 @@ class TruthTableGenerator:
         # 期待値を生成
         expected = self._generate_expected_value(condition, pattern, analysis, case_value)
         
+        # 葉条件テキストを取得（MC/DC用）
+        leaf_texts = analysis.get('leaf_texts', [])
+        
         # テストケースを作成
         test_case = TestCase(
             no=self.test_number,
             truth=pattern if not pattern.startswith('case_') else '-',
             condition=condition_str,
-            expected=expected
+            expected=expected,
+            leaf_texts=leaf_texts
         )
         
         return test_case

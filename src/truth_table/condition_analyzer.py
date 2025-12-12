@@ -96,7 +96,7 @@ class ConditionAnalyzer:
         else:
             # シンプルなOR条件
             patterns = mcdc_gen.generate_or_patterns(n_conditions)
-            leaf_texts = conditions
+            leaf_texts = conditions  # シンプルな場合もleaf_textsを設定
         
         # MC/DC説明を生成
         mcdc_explanation = {}
@@ -111,7 +111,7 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
-            'leaf_texts': leaf_texts if has_nested or n_conditions > 2 else None,
+            'leaf_texts': leaf_texts,  # 常に設定
             'description': f'OR条件（||）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
             'mcdc_explanation': mcdc_explanation,
             'has_nested': has_nested
@@ -146,7 +146,7 @@ class ConditionAnalyzer:
         else:
             # シンプルなAND条件
             patterns = mcdc_gen.generate_and_patterns(n_conditions)
-            leaf_texts = conditions
+            leaf_texts = conditions  # シンプルな場合もleaf_textsを設定
         
         # MC/DC説明を生成
         mcdc_explanation = {}
@@ -161,7 +161,7 @@ class ConditionAnalyzer:
             'left': condition.left,
             'right': condition.right,
             'patterns': patterns,
-            'leaf_texts': leaf_texts if has_nested or n_conditions > 2 else None,
+            'leaf_texts': leaf_texts,  # 常に設定
             'description': f'AND条件（&&）- {n_conditions}個の条件{"（ネスト構造含む）" if has_nested else ""}',
             'mcdc_explanation': mcdc_explanation,
             'has_nested': has_nested
