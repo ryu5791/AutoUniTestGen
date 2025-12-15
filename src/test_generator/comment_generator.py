@@ -81,6 +81,14 @@ class CommentGenerator:
         """
         details = []
         
+        # leaf_textsがある場合は、それを使って正確な詳細を生成
+        if test_case.leaf_texts and len(test_case.leaf_texts) == len(test_case.truth):
+            details.append(f"条件詳細（{len(test_case.leaf_texts)}個）:")
+            for i, (leaf_text, truth_char) in enumerate(zip(test_case.leaf_texts, test_case.truth), 1):
+                truth_str = "真" if truth_char == 'T' else "偽"
+                details.append(f"  条件{i}: {leaf_text} → {truth_str}")
+            return details
+        
         # 対応する条件を検索
         matching_condition = None
         for cond in parsed_data.conditions:
@@ -88,43 +96,20 @@ class CommentGenerator:
                 matching_condition = cond
                 break
         
-        # 単純条件（真偽が1文字）の場合
-        if len(test_case.truth) == 1:
-            if matching_condition and matching_condition.type == ConditionType.SIMPLE_IF:
-                details.append(f"条件式: {matching_condition.expression}")
-            elif test_case.leaf_texts and len(test_case.leaf_texts) == 1:
-                details.append(f"条件式: {test_case.leaf_texts[0]}")
+        if not matching_condition:
+            return details
+        
+        # 条件タイプ別に詳細を生成
+        if matching_condition.type == ConditionType.SIMPLE_IF:
+            details.append(f"条件式: {matching_condition.expression}")
             if test_case.truth == 'T':
                 details.append("→ 真の場合の処理を実行")
             else:
                 details.append("→ 偽の場合の処理をスキップ")
-            return details
         
-        # 複合条件の場合：leaf_textsを優先使用
-        if test_case.leaf_texts and len(test_case.leaf_texts) == len(test_case.truth):
-            # 条件タイプに応じたヘッダを生成
-            if matching_condition:
-                if matching_condition.type == ConditionType.OR_CONDITION:
-                    details.append(f"OR条件（{len(test_case.leaf_texts)}個）:")
-                elif matching_condition.type == ConditionType.AND_CONDITION:
-                    details.append(f"AND条件（{len(test_case.leaf_texts)}個）:")
-                else:
-                    details.append(f"条件詳細（{len(test_case.leaf_texts)}個）:")
-            else:
-                details.append(f"条件詳細（{len(test_case.leaf_texts)}個）:")
-            
-            for i, (leaf_text, truth_char) in enumerate(zip(test_case.leaf_texts, test_case.truth), 1):
-                truth_str = "真" if truth_char == 'T' else "偽"
-                details.append(f"  条件{i}: {leaf_text} → {truth_str}")
-            return details
-        
-        # leaf_textsがない場合のフォールバック
-        if not matching_condition:
-            return details
-        
-        # 条件タイプ別に詳細を生成（従来の方法）
-        if matching_condition.type == ConditionType.OR_CONDITION:
+        elif matching_condition.type == ConditionType.OR_CONDITION:
             if matching_condition.conditions:
+                # leaf_textsがない場合は従来の方法
                 details.append(f"OR条件（{len(matching_condition.conditions)}個）:")
                 for i, cond in enumerate(matching_condition.conditions, 1):
                     if i - 1 < len(test_case.truth):
@@ -137,6 +122,7 @@ class CommentGenerator:
         
         elif matching_condition.type == ConditionType.AND_CONDITION:
             if matching_condition.conditions:
+                # leaf_textsがない場合は従来の方法
                 details.append(f"AND条件（{len(matching_condition.conditions)}個）:")
                 for i, cond in enumerate(matching_condition.conditions, 1):
                     if i - 1 < len(test_case.truth):
