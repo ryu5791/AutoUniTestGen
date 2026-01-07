@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-from src.utils import setup_logger
+from src.utils import setup_logger, get_project_root
 from src.data_structures import StructDefinition, StructMember
 
 try:
@@ -48,9 +48,9 @@ class TypedefExtractor:
         Returns:
             標準型名のセット
         """
-        # パスの構築: src/parser/typedef_extractor.py -> ../../standard_types.h
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        std_types_path = os.path.join(base_path, '../../standard_types.h')
+        # v4.8.1: PyInstaller対応のパス解決
+        project_root = get_project_root()
+        std_types_path = os.path.join(project_root, 'standard_types.h')
         
         standard_types = set()
         

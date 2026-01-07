@@ -11,7 +11,7 @@ from pycparser import c_parser, c_ast, parse_file
 
 # パスを追加
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
-from src.utils import setup_logger
+from src.utils import setup_logger, get_resource_path, get_project_root
 
 
 class ASTBuilder:
@@ -97,9 +97,8 @@ class ASTBuilder:
         """
         standard_definitions = ""
         
-        # 標準定義ファイルのパスを取得
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(os.path.dirname(script_dir))
+        # v4.8.1: PyInstaller対応のパス解決
+        project_root = get_project_root()
         
         # 標準型定義ファイルを読み込み
         types_file = os.path.join(project_root, 'standard_types.h')
@@ -157,12 +156,16 @@ typedef enum { false = 0, true = 1 } bool;
     def _get_embedded_macro_definitions(self) -> str:
         """
         埋め込みマクロ定義を返す（フォールバック用）
+        
+        注意: pycparserは#defineをサポートしないため、
+        定数変数として定義する
         """
         return """
-#define NULL ((void*)0)
-#define INT8_MIN   (-127 - 1)
-#define INT8_MAX   127
-#define UINT8_MAX  0xffU
+/* pycparser互換: #defineの代わりに定数として定義 */
+static void* const NULL = 0;
+static const int INT8_MIN = (-127 - 1);
+static const int INT8_MAX = 127;
+static const unsigned int UINT8_MAX = 0xffU;
 """
     
     def _handle_parse_error(self, error: Exception, code: str = "") -> None:

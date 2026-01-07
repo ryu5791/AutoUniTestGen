@@ -5,10 +5,53 @@
 """
 
 import os
+import sys
 import logging
 import re
 from typing import Optional, List
 from pathlib import Path
+
+
+# PyInstaller対応: リソースファイルのパス解決
+def get_resource_path(filename: str, base_path: str = None) -> str:
+    """
+    PyInstaller exe化対応のリソースファイルパス解決
+    
+    exe実行時は _MEIPASS (一時フォルダ)、
+    通常実行時は base_path または現在のディレクトリを基準にする
+    
+    Args:
+        filename: ファイル名
+        base_path: 通常実行時の基準パス（Noneの場合は現在のディレクトリ）
+    
+    Returns:
+        解決されたファイルパス
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # exe実行時: PyInstallerが展開した一時フォルダ
+        return os.path.join(sys._MEIPASS, filename)
+    else:
+        # 通常実行時
+        if base_path:
+            return os.path.join(base_path, filename)
+        else:
+            return os.path.join(os.path.abspath("."), filename)
+
+
+def get_project_root() -> str:
+    """
+    プロジェクトルートディレクトリを取得
+    
+    exe実行時は _MEIPASS、通常実行時はsrcの親ディレクトリ
+    
+    Returns:
+        プロジェクトルートのパス
+    """
+    if hasattr(sys, '_MEIPASS'):
+        return sys._MEIPASS
+    else:
+        # src/utils.py -> ../ (プロジェクトルート)
+        return str(Path(__file__).resolve().parent.parent)
 
 
 # ロギング設定

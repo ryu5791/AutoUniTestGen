@@ -52,9 +52,16 @@ def get_version() -> str:
     Returns:
         バージョン文字列
     """
+    import os
     try:
-        # src/cli.py -> ../VERSION
-        version_file = Path(__file__).resolve().parent.parent / 'VERSION'
+        # v4.8.1: PyInstaller対応のパス解決
+        if hasattr(sys, '_MEIPASS'):
+            # exe実行時
+            version_file = os.path.join(sys._MEIPASS, 'VERSION')
+        else:
+            # 通常実行時: src/cli.py -> ../VERSION
+            version_file = Path(__file__).resolve().parent.parent / 'VERSION'
+        
         with open(version_file, 'r', encoding='utf-8') as f:
             return f.read().strip()
     except FileNotFoundError:

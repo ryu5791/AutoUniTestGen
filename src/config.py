@@ -64,6 +64,30 @@ class ConfigManager:
         self.config_path = Path(config_path) if config_path else None
         self.config = GeneratorConfig()
     
+    def _get_search_paths(self) -> list:
+        """
+        v4.8.1: PyInstaller対応の設定ファイル検索パスを取得
+        
+        Returns:
+            検索パスのリスト
+        """
+        import sys
+        import os
+        
+        paths = []
+        
+        # カレントディレクトリ（最優先）
+        paths.append(Path("."))
+        
+        if hasattr(sys, '_MEIPASS'):
+            # exe実行時: PyInstallerの展開先
+            paths.append(Path(sys._MEIPASS))
+        else:
+            # 通常実行時: src/config.py -> ../
+            paths.append(Path(__file__).resolve().parent.parent)
+        
+        return paths
+    
     def _find_config_file(self) -> Optional[Path]:
         """
         設定ファイルを検索
@@ -75,11 +99,14 @@ class ConfigManager:
         if self.config_path and self.config_path.exists():
             return self.config_path
         
-        # デフォルトファイル名を順番に探す
-        for config_name in self.DEFAULT_CONFIG_NAMES:
-            path = Path(config_name)
-            if path.exists():
-                return path
+        # v4.8.1: 複数の検索パスから探す
+        search_paths = self._get_search_paths()
+        
+        for search_path in search_paths:
+            for config_name in self.DEFAULT_CONFIG_NAMES:
+                path = search_path / config_name
+                if path.exists():
+                    return path
         
         return None
     

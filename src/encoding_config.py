@@ -5,6 +5,8 @@
 """
 
 import configparser
+import sys
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -12,17 +14,41 @@ from typing import Optional
 OUTPUT_ENCODING = "shift_jis"
 
 
-def load_encoding_config(config_path: str = "config.ini") -> str:
+def _get_config_path(config_name: str = "config.ini") -> str:
+    """
+    v4.8.1: PyInstaller対応の設定ファイルパス解決
+    
+    Args:
+        config_name: 設定ファイル名
+    
+    Returns:
+        設定ファイルのフルパス
+    """
+    if hasattr(sys, '_MEIPASS'):
+        # exe実行時
+        return os.path.join(sys._MEIPASS, config_name)
+    else:
+        # 通常実行時: カレントディレクトリを優先
+        if Path(config_name).exists():
+            return config_name
+        # src/encoding_config.py -> ../config.ini
+        return str(Path(__file__).resolve().parent.parent / config_name)
+
+
+def load_encoding_config(config_path: str = None) -> str:
     """
     設定ファイルから出力エンコーディングを読み込む
     
     Args:
-        config_path: 設定ファイルのパス
+        config_path: 設定ファイルのパス（Noneの場合は自動解決）
     
     Returns:
         str: 出力エンコーディング
     """
     global OUTPUT_ENCODING
+    
+    if config_path is None:
+        config_path = _get_config_path()
     
     if Path(config_path).exists():
         parser = configparser.ConfigParser()
