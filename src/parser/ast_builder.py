@@ -175,27 +175,43 @@ typedef enum { false = 0, true = 1 } bool;
         """
         self.logger.error(f"ASTパースエラー: {str(error)}")
         
+        if not code:
+            return
+        
         # エラー箇所を特定
         error_msg = str(error)
-        
-        # 行番号が含まれている場合
         import re
-        match = re.search(r'line (\d+)', error_msg)
-        if match and code:
+        
+        # 複数の行番号パターンに対応
+        # パターン1: <string>:45:1: 形式
+        # パターン2: line 45 形式
+        line_no = None
+        
+        match = re.search(r'<string>:(\d+):\d+:', error_msg)
+        if match:
             line_no = int(match.group(1))
-            lines = code.split('\n')
+        else:
+            match = re.search(r'line (\d+)', error_msg)
+            if match:
+                line_no = int(match.group(1))
+        
+        if line_no is None:
+            return
+        
+        lines = code.split('\n')
+        
+        if 0 < line_no <= len(lines):
+            # 前後の行を表示（前後5行）
+            context_range = 5
+            start = max(0, line_no - 1 - context_range)
+            end = min(len(lines), line_no + context_range)
             
-            if 0 < line_no <= len(lines):
-                self.logger.error(f"エラー行({line_no}): {lines[line_no-1]}")
-                
-                # 前後の行も表示
-                start = max(0, line_no - 3)
-                end = min(len(lines), line_no + 2)
-                
-                self.logger.debug("エラー周辺のコード:")
-                for i in range(start, end):
-                    marker = ">>> " if i == line_no - 1 else "    "
-                    self.logger.debug(f"{marker}{i+1:4d}: {lines[i]}")
+            self.logger.error(f"エラー発生箇所 (行 {line_no}):")
+            self.logger.error("-" * 60)
+            for i in range(start, end):
+                marker = ">>> " if i == line_no - 1 else "    "
+                self.logger.error(f"{marker}{i+1:4d}: {lines[i]}")
+            self.logger.error("-" * 60)
     
     def visit_ast(self, ast: c_ast.FileAST, visitor: c_ast.NodeVisitor) -> None:
         """
