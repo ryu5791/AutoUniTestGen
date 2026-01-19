@@ -583,6 +583,8 @@ class Preprocessor:
         """
         条件付きコンパイル（#ifdef, #ifndef, #if）を処理
         
+        v4.8.2: インクルードガード（#ifndef XXX_H）を検出して常に真として扱う
+        
         Args:
             code: ソースコード
         
@@ -594,6 +596,9 @@ class Preprocessor:
         
         # スタックで#if/#ifdef/#ifndef のネストを管理
         condition_stack = []
+        
+        # インクルードガードパターン（_H または _H_ で終わるマクロ）
+        include_guard_pattern = re.compile(r'^[A-Z_][A-Z0-9_]*_H_?$')
         
         i = 0
         while i < len(lines):
@@ -613,7 +618,15 @@ class Preprocessor:
             ifndef_match = re.match(r'^\s*#ifndef\s+(\w+)', line)
             if ifndef_match:
                 macro_name = ifndef_match.group(1)
-                is_not_defined = macro_name not in self.defines
+                
+                # v4.8.2: インクルードガードは常に真として扱う
+                if include_guard_pattern.match(macro_name):
+                    # インクルードガードは内容を保持（常に真）
+                    is_not_defined = True
+                    self.logger.debug(f"インクルードガード検出: {macro_name} -> 常に真として扱う")
+                else:
+                    is_not_defined = macro_name not in self.defines
+                
                 condition_stack.append(('ifndef', is_not_defined))
                 processed_lines.append(f"// {line}")
                 i += 1
