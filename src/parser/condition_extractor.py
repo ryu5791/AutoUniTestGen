@@ -111,8 +111,8 @@ class ConditionExtractor(c_ast.NodeVisitor):
         else:
             self.logger.debug(f"ソースから条件式を抽出 (元行{original_line_no}): {condition_str[:50]}...")
         
-        # 条件式を解析
-        condition_info = self._analyze_binary_op(node.cond)
+        # v4.8.4: 条件式テキストから直接解析（ASTノードの行番号ずれ問題を回避）
+        condition_info = self._analyze_condition_text(condition_str)
         
         # Conditionオブジェクトを作成
         condition = Condition(
@@ -211,6 +211,165 @@ class ConditionExtractor(c_ast.NodeVisitor):
         
         # 単純な条件
         return {'type': ConditionType.SIMPLE_IF}
+    
+    def _analyze_condition_text(self, condition_str: str) -> dict:
+        """
+        v4.8.4: 条件式テキストを直接解析（ASTノードの行番号ずれ問題を回避）
+        
+        Args:
+            condition_str: 条件式テキスト
+        
+        Returns:
+            解析結果の辞書
+        """
+        if not condition_str:
+            return {'type': ConditionType.SIMPLE_IF}
+        
+        # トップレベルの演算子を特定
+        top_op = self._find_top_level_operator(condition_str)
+        
+        if top_op == '||':
+            # OR条件
+            conditions = self._split_by_top_operator(condition_str, '||')
+            return {
+                'type': ConditionType.OR_CONDITION,
+                'operator': 'or',
+                'conditions': conditions,
+                'left': conditions[0] if len(conditions) > 0 else '',
+                'right': conditions[1] if len(conditions) > 1 else ''
+            }
+        
+        elif top_op == '&&':
+            # AND条件
+            conditions = self._split_by_top_operator(condition_str, '&&')
+            return {
+                'type': ConditionType.AND_CONDITION,
+                'operator': 'and',
+                'conditions': conditions,
+                'left': conditions[0] if len(conditions) > 0 else '',
+                'right': conditions[1] if len(conditions) > 1 else ''
+            }
+        
+        # 単純な条件
+        return {'type': ConditionType.SIMPLE_IF}
+    
+    def _find_top_level_operator(self, text: str) -> Optional[str]:
+        """
+        トップレベル（最も外側）の論理演算子を見つける
+        
+        Args:
+            text: 条件式テキスト
+        
+        Returns:
+            演算子（'||' or '&&'）またはNone
+        """
+        text = text.strip()
+        # 外側の括弧を除去
+        while text.startswith('(') and text.endswith(')'):
+            depth = 0
+            valid = True
+            for i, char in enumerate(text[1:-1], 1):
+                if char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+                    if depth < 0:
+                        valid = False
+                        break
+            if valid and depth == 0:
+                text = text[1:-1].strip()
+            else:
+                break
+        
+        depth = 0
+        i = 0
+        while i < len(text):
+            char = text[i]
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif depth == 0:
+                # トップレベルで演算子を探す
+                # ||を先にチェック（優先度が低いため外側に来る）
+                if text[i:i+2] == '||':
+                    return '||'
+                if text[i:i+2] == '&&':
+                    # まだ||があるかもしれないので、最後まで探索
+                    pass
+            i += 1
+        
+        # ||がなければ&&を探す
+        depth = 0
+        i = 0
+        while i < len(text):
+            char = text[i]
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif depth == 0 and text[i:i+2] == '&&':
+                return '&&'
+            i += 1
+        
+        return None
+    
+    def _split_by_top_operator(self, text: str, operator: str) -> List[str]:
+        """
+        トップレベルの演算子で条件式を分割
+        
+        Args:
+            text: 条件式テキスト
+            operator: 演算子（'||' or '&&'）
+        
+        Returns:
+            分割された条件のリスト
+        """
+        text = text.strip()
+        # 外側の括弧を除去
+        while text.startswith('(') and text.endswith(')'):
+            depth = 0
+            valid = True
+            for i, char in enumerate(text[1:-1], 1):
+                if char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+                    if depth < 0:
+                        valid = False
+                        break
+            if valid and depth == 0:
+                text = text[1:-1].strip()
+            else:
+                break
+        
+        parts = []
+        current = ""
+        depth = 0
+        i = 0
+        op_len = len(operator)
+        
+        while i < len(text):
+            char = text[i]
+            if char == '(':
+                depth += 1
+                current += char
+            elif char == ')':
+                depth -= 1
+                current += char
+            elif depth == 0 and text[i:i+op_len] == operator:
+                if current.strip():
+                    parts.append(current.strip())
+                current = ""
+                i += op_len - 1
+            else:
+                current += char
+            i += 1
+        
+        if current.strip():
+            parts.append(current.strip())
+        
+        return parts
     
     def _extract_all_conditions(self, node, target_operator: str) -> List[str]:
         """
