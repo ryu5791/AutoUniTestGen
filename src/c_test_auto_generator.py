@@ -151,10 +151,15 @@ class CTestAutoGenerator:
         
         # configからinclude関連の設定を取得
         include_paths = self.config.get('include_paths', [])
-        enable_includes = self.config.get('enable_includes', False)
+        # v4.8.2: デフォルトでインクルード展開を有効化
+        enable_includes = self.config.get('enable_includes', True)
         
         # v2.2: テスト対象関数本体をテストコードに含めるかの設定
         include_target_function = self.config.get('include_target_function', True)
+        
+        # v4.8.2: パーサー初期化時にinclude_pathsを渡す（ファイル解析時に更新）
+        self._base_include_paths = include_paths.copy() if include_paths else []
+        self._enable_includes = enable_includes
         
         self.parser = CCodeParser(
             defines=defines,
@@ -195,6 +200,12 @@ class CTestAutoGenerator:
             # 出力ディレクトリ作成（CLIで既にユニーク化済み）
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
+            
+            # v4.8.2: 入力ファイルのディレクトリをinclude_pathsに追加
+            input_dir = str(Path(c_file_path).parent.absolute())
+            if input_dir not in self.parser.preprocessor.include_paths:
+                self.parser.preprocessor.include_paths.insert(0, input_dir)
+                print(f"[INFO] v4.8.2: インクルードパスを追加: {input_dir}")
             
             # ファイル名のデフォルト設定
             base_name = Path(c_file_path).stem

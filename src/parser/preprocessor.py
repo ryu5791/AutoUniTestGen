@@ -55,28 +55,32 @@ class Preprocessor:
         if self.defines:
             self.logger.info(f"事前定義されたマクロ: {list(self.defines.keys())}")
         
-        # 1. #define処理（コード内の定義を収集）
-        code = self._collect_defines(code)
+        # v4.8.2: 処理順序を変更
+        # 1. 元のコメントを削除
+        code = self._remove_comments(code)
         
-        # 2. 条件付きコンパイル処理（#ifdef, #ifndef, #if）
-        code = self._process_conditional_compilation(code)
-        
-        # 3. ビットフィールドをコメント化（pycparser互換性のため）
-        code = self._remove_bitfields(code)
-        
-        # 4. 関数マクロ展開
-        code = self._expand_function_macros(code)
-        
-        # 5. 通常マクロ展開
-        code = self._expand_macros(code)
-        
-        # 6. #include処理（削除）
+        # 2. #include処理（すべてのヘッダーを展開）
         code = self._handle_includes(code)
         
-        # 7. 残りのディレクティブ処理
+        # 3. #define処理（展開後のコード全体から収集）
+        code = self._collect_defines(code)
+        
+        # 4. 条件付きコンパイル処理（#ifdef, #ifndef, #if）
+        code = self._process_conditional_compilation(code)
+        
+        # 5. ビットフィールドをコメント化（pycparser互換性のため）
+        code = self._remove_bitfields(code)
+        
+        # 6. 関数マクロ展開
+        code = self._expand_function_macros(code)
+        
+        # 7. 通常マクロ展開
+        code = self._expand_macros(code)
+        
+        # 8. 残りのディレクティブ処理
         code = self._process_remaining_directives(code)
         
-        # 8. コメント削除（最後に実行）
+        # 9. 処理中に生成されたコメントを削除
         code = self._remove_comments(code)
         
         # マクロ定義のサマリーをログ出力
@@ -819,7 +823,10 @@ class Preprocessor:
     
     def _preprocess_header_content(self, content: str) -> str:
         """
-        ヘッダーファイルの内容を前処理
+        ヘッダーファイルの内容を前処理（インクルード展開のみ）
+        
+        v4.8.2: メインの処理で全体を処理するため、
+        ここではネストしたインクルードの展開のみを行う
         
         Args:
             content: ヘッダーファイルの内容
@@ -827,21 +834,31 @@ class Preprocessor:
         Returns:
             前処理済みの内容
         """
-        # コメント削除
-        content = self._remove_comments(content)
-        
-        # #defineを収集（ヘッダー内のマクロも利用可能に）
-        content = self._collect_defines(content)
-        
-        # 条件付きコンパイルを処理
-        content = self._process_conditional_compilation(content)
-        
-        # #includeは無効化（ネストしたインクルードは処理しない）
+        # v4.8.2: ネストしたインクルードのみを展開
+        # マクロ収集と条件付きコンパイルはメイン処理で行う
         lines = content.split('\n')
         processed_lines = []
         for line in lines:
-            if re.match(r'^\s*#include\s+', line):
-                processed_lines.append(f"/* {line} - ネストしたインクルード */")
+            include_match = re.match(r'^\s*#include\s+([<"])(.+?)[>"]', line)
+            if include_match:
+                quote_type = include_match.group(1)
+                header_file = include_match.group(2)
+                
+                # 標準ヘッダはコメント化
+                if quote_type == '<' or self._is_standard_header(header_file):
+                    processed_lines.append(f"/* {line} - 標準ヘッダスキップ */")
+                else:
+                    # ユーザー定義ヘッダを再帰的に読み込み
+                    self.logger.info(f"  📂 ネストしたヘッダーを展開中: {header_file}")
+                    nested_content = self._read_header_file(header_file)
+                    if nested_content is not None:
+                        processed_lines.append(f"/* {line} - ネスト展開開始 */")
+                        processed_lines.append(nested_content)
+                        processed_lines.append(f"/* {line} - ネスト展開終了 */")
+                        self.logger.info(f"  ✓ ネストしたヘッダーを展開完了: {header_file}")
+                    else:
+                        processed_lines.append(f"/* {line} - ファイルが見つかりません */")
+                        self.logger.warning(f"  ✗ ネストしたヘッダーが見つかりません: {header_file}")
             else:
                 processed_lines.append(line)
         
