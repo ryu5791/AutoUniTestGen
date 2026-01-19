@@ -101,15 +101,15 @@ class ConditionExtractor(c_ast.NodeVisitor):
         # v3.1: オフセットを適用して元のソース行番号を取得
         original_line_no = ast_line_no - self.line_offset
         
-        # v3.1: 元のソースコードから条件式を抽出（括弧構造を維持）
-        condition_str = self._extract_condition_from_source(original_line_no)
+        # v4.8.4: ASTノードから条件式を構築（括弧構造を維持）
+        # これにより、コメントによる行番号ずれの問題を回避
+        condition_str = self._node_to_str(node.cond, is_top_level=True)
         
-        # フォールバック: 抽出失敗時はASTから再構築
-        if not condition_str:
-            condition_str = self._node_to_str(node.cond, is_top_level=True)
-            self.logger.debug(f"フォールバック: ASTから条件式を再構築 (AST行{ast_line_no}→元行{original_line_no})")
-        else:
-            self.logger.debug(f"ソースから条件式を抽出 (元行{original_line_no}): {condition_str[:50]}...")
+        # 括弧で囲む（一貫性のため）
+        if not condition_str.startswith('('):
+            condition_str = f'({condition_str})'
+        
+        self.logger.debug(f"ASTから条件式を構築 (AST行{ast_line_no}→元行{original_line_no}): {condition_str[:50]}...")
         
         # v4.8.4: 条件式テキストから直接解析（ASTノードの行番号ずれ問題を回避）
         condition_info = self._analyze_condition_text(condition_str)
