@@ -960,7 +960,7 @@ class TestFunctionGenerator:
     
     def _generate_or_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> List[str]:
         """
-        OR条件の初期化コードを生成
+        OR条件の初期化コードを生成 (v5.0.3: 葉条件展開対応)
         
         Args:
             condition: 条件
@@ -972,7 +972,8 @@ class TestFunctionGenerator:
         """
         init_list = []
         
-        conditions = condition.conditions if condition.conditions else [condition.left, condition.right]
+        # v5.0.3: 条件を葉条件に展開
+        leaf_conditions = self._expand_to_leaf_conditions(condition)
         
         # v3.3.0: ValueResolverを使用
         value_resolver = ValueResolver(parsed_data)
@@ -991,8 +992,8 @@ class TestFunctionGenerator:
             'sizeof', 'offsetof'
         }
         
-        # 各条件に対して値を設定
-        for i, cond in enumerate(conditions):
+        # 各葉条件に対して値を設定
+        for i, cond in enumerate(leaf_conditions):
             if i < len(truth):
                 truth_val = truth[i]
                 test_value = self.boundary_calc.generate_test_value_with_parsed_data(cond, truth_val, parsed_data)
@@ -1035,6 +1036,123 @@ class TestFunctionGenerator:
                             init_list.append(f"{var} = {init_val};  // {comment}")
         
         return init_list
+    
+    def _expand_to_leaf_conditions(self, condition: Condition) -> List[str]:
+        """
+        複合条件を葉条件のリストに展開 (v5.0.3)
+        
+        例: ((age >= 18) && has_license) || is_admin
+        → ['age >= 18', 'has_license', 'is_admin']
+        
+        Args:
+            condition: 条件オブジェクト
+        
+        Returns:
+            葉条件の文字列リスト
+        """
+        # 条件リストがある場合
+        conditions = condition.conditions if condition.conditions else []
+        if not conditions and condition.left and condition.right:
+            conditions = [condition.left, condition.right]
+        
+        leaf_conditions = []
+        
+        for cond in conditions:
+            # サブ条件を再帰的に展開
+            expanded = self._expand_condition_string(cond)
+            leaf_conditions.extend(expanded)
+        
+        return leaf_conditions
+    
+    def _expand_condition_string(self, cond_str: str) -> List[str]:
+        """
+        条件文字列を葉条件に展開 (v5.0.3)
+        
+        Args:
+            cond_str: 条件文字列
+        
+        Returns:
+            葉条件のリスト
+        """
+        cond_str = cond_str.strip()
+        
+        # 最外側の括弧を削除
+        while cond_str.startswith('(') and cond_str.endswith(')'):
+            # 括弧のバランスをチェック
+            depth = 0
+            balanced = True
+            for i, c in enumerate(cond_str[1:-1]):
+                if c == '(':
+                    depth += 1
+                elif c == ')':
+                    depth -= 1
+                if depth < 0:
+                    balanced = False
+                    break
+            if balanced and depth == 0:
+                cond_str = cond_str[1:-1].strip()
+            else:
+                break
+        
+        # AND/ORで分割を試みる
+        # まずトップレベルのORを探す
+        or_parts = self._split_by_top_operator(cond_str, '||')
+        if len(or_parts) > 1:
+            result = []
+            for part in or_parts:
+                result.extend(self._expand_condition_string(part))
+            return result
+        
+        # トップレベルのANDを探す
+        and_parts = self._split_by_top_operator(cond_str, '&&')
+        if len(and_parts) > 1:
+            result = []
+            for part in and_parts:
+                result.extend(self._expand_condition_string(part))
+            return result
+        
+        # これ以上分割できない場合は葉条件
+        return [cond_str]
+    
+    def _split_by_top_operator(self, expr: str, operator: str) -> List[str]:
+        """
+        トップレベルの演算子で分割 (v5.0.3)
+        
+        Args:
+            expr: 式
+            operator: 演算子（'||' または '&&'）
+        
+        Returns:
+            分割された部分のリスト
+        """
+        parts = []
+        current = ""
+        depth = 0
+        i = 0
+        
+        while i < len(expr):
+            c = expr[i]
+            
+            if c == '(':
+                depth += 1
+                current += c
+            elif c == ')':
+                depth -= 1
+                current += c
+            elif depth == 0 and expr[i:i+len(operator)] == operator:
+                if current.strip():
+                    parts.append(current.strip())
+                current = ""
+                i += len(operator) - 1
+            else:
+                current += c
+            
+            i += 1
+        
+        if current.strip():
+            parts.append(current.strip())
+        
+        return parts if len(parts) > 1 else [expr]
     
     def _generate_and_condition_init(self, condition: Condition, truth: str, parsed_data: ParsedData) -> List[str]:
         """
@@ -1304,12 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算
-        
-        簡易実装:
-        - 真の分岐 → 1 または定数値
-        - 偽の分岐 → 0 または別の定数値
-        - より高度な実装は将来のPhaseで
+        戻り値の期待値を計算 (v5.0.3: 複合条件対応)
         
         Args:
             test_case: テストケース
@@ -1324,12 +1437,137 @@ class TestFunctionGenerator:
             if 'result' in test_case.output_values:
                 return str(test_case.output_values['result'])
         
-        # デフォルトの簡易計算
-        # 真の分岐の場合は1、偽の分岐の場合は0を返す
-        if test_case.truth == 'T':
+        # v5.0.3: 複合条件の決定結果を計算
+        decision = self._evaluate_decision(test_case, parsed_data)
+        
+        if decision:
             return "1"
         else:
             return "0"
+    
+    def _evaluate_decision(self, test_case: TestCase, parsed_data: ParsedData) -> bool:
+        """
+        複合条件の決定結果を評価 (v5.0.3)
+        
+        条件式の真偽パターンから全体の決定結果を計算
+        例: (A && B) || C で TFT の場合 → (T && F) || T = F || T = T
+        
+        Args:
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            決定結果（True/False）
+        """
+        truth = test_case.truth
+        condition_expr = test_case.condition
+        
+        # 単純な条件（T または F のみ）
+        if truth == 'T':
+            return True
+        elif truth == 'F':
+            return False
+        
+        # 複合条件の場合、条件式の構造を解析して決定結果を計算
+        # 条件式からAND/ORの構造を推測
+        
+        # leaf_textsがある場合はそれを使用
+        leaf_texts = getattr(test_case, 'leaf_texts', [])
+        
+        # 条件式の構造を簡易解析
+        # パターン: (A && B) || C, A || B, A && B, etc.
+        
+        if '||' in condition_expr and '&&' in condition_expr:
+            # 複合条件 (A && B) || C のようなパターン
+            return self._evaluate_complex_condition(condition_expr, truth)
+        elif '||' in condition_expr:
+            # OR条件: いずれかがTならTrue
+            return 'T' in truth
+        elif '&&' in condition_expr:
+            # AND条件: 全てがTならTrue
+            return 'F' not in truth
+        else:
+            # 単純条件
+            return truth == 'T'
+    
+    def _evaluate_complex_condition(self, condition_expr: str, truth: str) -> bool:
+        """
+        複合条件式を評価 (v5.0.3)
+        
+        例: ((age >= 18) && has_license) || is_admin
+        パターン TFT → (T && F) || T = F || T = T
+        
+        Args:
+            condition_expr: 条件式
+            truth: 真偽パターン（例: "TFT"）
+        
+        Returns:
+            決定結果
+        """
+        # 条件式のパターンを解析
+        # 括弧の深さとAND/ORの位置を追跡
+        
+        # 簡易実装: 最も外側のORで分割し、各部分を評価
+        # (A && B) || C の形式を想定
+        
+        # まず括弧を考慮してトップレベルのORを探す
+        depth = 0
+        top_level_or_pos = -1
+        
+        for i, char in enumerate(condition_expr):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif depth == 0 and i < len(condition_expr) - 1:
+                if condition_expr[i:i+2] == '||':
+                    top_level_or_pos = i
+                    break
+        
+        if top_level_or_pos != -1:
+            # (A && B) || C の形式
+            left_part = condition_expr[:top_level_or_pos].strip()
+            right_part = condition_expr[top_level_or_pos+2:].strip()
+            
+            # 左側のAND条件の数を数える
+            left_and_count = left_part.count('&&') + 1
+            
+            if len(truth) >= left_and_count + 1:
+                # 左側のAND部分の評価
+                left_truth = truth[:left_and_count]
+                left_result = 'F' not in left_truth  # AND: 全てTならTrue
+                
+                # 右側の評価
+                right_truth = truth[left_and_count:]
+                right_result = 'T' in right_truth if right_truth else False
+                
+                # OR結合
+                return left_result or right_result
+        
+        # トップレベルのANDを探す
+        top_level_and_pos = -1
+        depth = 0
+        for i, char in enumerate(condition_expr):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif depth == 0 and i < len(condition_expr) - 1:
+                if condition_expr[i:i+2] == '&&':
+                    top_level_and_pos = i
+                    break
+        
+        if top_level_and_pos != -1:
+            # A && B の形式
+            return 'F' not in truth
+        
+        # フォールバック: OR優先で評価
+        if '||' in condition_expr:
+            return 'T' in truth
+        elif '&&' in condition_expr:
+            return 'F' not in truth
+        
+        return truth == 'T'
     
     def _calculate_expected_variable_value(self, var: str, test_case: TestCase,
                                             parsed_data: ParsedData) -> Optional[str]:

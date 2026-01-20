@@ -578,7 +578,7 @@ class UnityTestGenerator:
     
     def _generate_variable_init_code(self, parsed_data: ParsedData) -> list:
         """
-        static変数とグローバル変数の初期化コードを生成 (v5.0.0)
+        static変数とグローバル変数の初期化コードを生成 (v5.0.0, v5.0.3: パラメータ除外修正)
         
         Args:
             parsed_data: 解析済みデータ
@@ -588,9 +588,39 @@ class UnityTestGenerator:
         """
         init_lines = []
         
+        # v5.0.3: 関数パラメータ名を収集（これらは除外対象）
+        param_names = set()
+        if hasattr(parsed_data, 'function_signatures') and parsed_data.function_signatures:
+            for func_name, sig in parsed_data.function_signatures.items():
+                if hasattr(sig, 'parameters'):
+                    for param in sig.parameters:
+                        if hasattr(param, 'name') and param.name:
+                            param_names.add(param.name)
+        # function_infoからもパラメータ名を収集
+        if hasattr(parsed_data, 'function_info') and parsed_data.function_info:
+            if hasattr(parsed_data.function_info, 'parameters'):
+                for param in parsed_data.function_info.parameters:
+                    if hasattr(param, 'name') and param.name:
+                        param_names.add(param.name)
+                    elif isinstance(param, dict) and 'name' in param:
+                        param_names.add(param['name'])
+                    elif isinstance(param, str):
+                        # "型 名前" 形式から名前を抽出
+                        parts = param.split()
+                        if parts:
+                            param_names.add(parts[-1].replace('*', ''))
+        
+        # v5.0.3: ローカル変数名を収集（これらも除外対象）
+        local_var_names = set()
+        if hasattr(parsed_data, 'local_variables') and parsed_data.local_variables:
+            local_var_names = set(parsed_data.local_variables.keys())
+        
         # static変数の初期化
         if hasattr(parsed_data, 'static_variables') and parsed_data.static_variables:
             for var in parsed_data.static_variables:
+                # パラメータやローカル変数は除外
+                if var.name in param_names or var.name in local_var_names:
+                    continue
                 init_line = self._generate_single_var_init(var, parsed_data)
                 if init_line:
                     init_lines.append(init_line)
@@ -598,6 +628,9 @@ class UnityTestGenerator:
         # グローバル変数の初期化
         if hasattr(parsed_data, 'global_variable_infos') and parsed_data.global_variable_infos:
             for var in parsed_data.global_variable_infos:
+                # パラメータやローカル変数は除外
+                if var.name in param_names or var.name in local_var_names:
+                    continue
                 init_line = self._generate_single_var_init(var, parsed_data)
                 if init_line:
                     init_lines.append(init_line)
@@ -622,10 +655,14 @@ class UnityTestGenerator:
                                 struct_member_names.add(member.name)
             
             for var_name in parsed_data.global_variables:
-                # 既に処理済み、または構造体メンバーの場合は除外
+                # 既に処理済み、構造体メンバー、パラメータ、ローカル変数の場合は除外
                 if var_name in processed_names:
                     continue
                 if var_name in struct_member_names:
+                    continue
+                if var_name in param_names:
+                    continue
+                if var_name in local_var_names:
                     continue
                 # 型情報がない場合は0で初期化
                 init_lines.append(f"{var_name} = 0;")
