@@ -272,18 +272,30 @@ class TypedefInfo:
 
 @dataclass
 class VariableDeclInfo:
-    """変数宣言情報 (v2.2で追加)"""
+    """変数宣言情報 (v2.2で追加, v5.0.0でstatic/配列/構造体対応)"""
     name: str
     var_type: str
     is_extern: bool
     definition: str
+    is_static: bool = False           # v5.0.0: static変数かどうか
+    is_array: bool = False            # v5.0.0: 配列かどうか
+    array_size: Optional[int] = None  # v5.0.0: 配列サイズ
+    is_struct: bool = False           # v5.0.0: 構造体かどうか
+    struct_type: str = ""             # v5.0.0: 構造体の型名
+    initial_value: str = ""           # v5.0.0: 初期値（ソースから抽出）
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'name': self.name,
             'var_type': self.var_type,
             'is_extern': self.is_extern,
-            'definition': self.definition
+            'definition': self.definition,
+            'is_static': self.is_static,
+            'is_array': self.is_array,
+            'array_size': self.array_size,
+            'is_struct': self.is_struct,
+            'struct_type': self.struct_type,
+            'initial_value': self.initial_value
         }
 
 
@@ -451,6 +463,8 @@ class ParsedData:
     function_signatures: Dict[str, 'FunctionSignature'] = field(default_factory=dict)  # v4.0: 関数シグネチャ
     local_variables: Dict[str, 'LocalVariableInfo'] = field(default_factory=dict)  # v4.2.0: ローカル変数情報
     function_pointer_tables: List['FunctionPointerTable'] = field(default_factory=list)  # v4.7: 関数ポインタテーブル
+    static_variables: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: static変数詳細情報
+    global_variable_infos: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: グローバル変数詳細情報
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """
@@ -490,7 +504,9 @@ class ParsedData:
             'macro_definitions': self.macro_definitions,
             'struct_definitions': [s.to_dict() for s in self.struct_definitions],
             'function_signatures': {k: v.to_dict() for k, v in self.function_signatures.items()},  # v4.0
-            'function_pointer_tables': [t.to_dict() for t in self.function_pointer_tables]  # v4.7
+            'function_pointer_tables': [t.to_dict() for t in self.function_pointer_tables],  # v4.7
+            'static_variables': [v.to_dict() for v in self.static_variables],  # v5.0.0
+            'global_variable_infos': [v.to_dict() for v in self.global_variable_infos]  # v5.0.0
         }
 
 

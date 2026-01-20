@@ -197,6 +197,10 @@ class CCodeParser:
             function_signatures.update(table_signatures)
             self.logger.info(f"関数ポインタテーブルから{len(table_functions)}個の関数を登録しました")
             
+            # 11.11. v5.0.0: static変数とグローバル変数の詳細情報を抽出
+            static_variables, global_variable_infos = self._extract_variable_details(ast, code)
+            self.logger.info(f"{len(static_variables)}個のstatic変数、{len(global_variable_infos)}個のグローバル変数詳細を抽出しました")
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -215,7 +219,9 @@ class CCodeParser:
                 struct_definitions=struct_definitions,  # v2.8.0: 追加
                 function_signatures=function_signatures,  # v4.0: 追加
                 local_variables=local_variables,  # v4.2.0: 追加
-                function_pointer_tables=function_pointer_tables  # v4.7: 追加
+                function_pointer_tables=function_pointer_tables,  # v4.7: 追加
+                static_variables=static_variables,  # v5.0.0: 追加
+                global_variable_infos=global_variable_infos  # v5.0.0: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")
@@ -439,6 +445,195 @@ class CCodeParser:
         visitor.visit(ast)
         
         return visitor.variables
+    
+    def _extract_variable_details(self, ast, source_code: str) -> tuple:
+        """
+        グローバル変数とstatic変数の詳細情報を抽出 (v5.0.0)
+        
+        Args:
+            ast: AST
+            source_code: ソースコード
+        
+        Returns:
+            (static_variables, global_variable_infos) のタプル
+        """
+        from pycparser import c_ast
+        from src.data_structures import VariableDeclInfo
+        
+        static_vars = []
+        global_vars = []
+        
+        class DetailedVarVisitor(c_ast.NodeVisitor):
+            def __init__(self, source):
+                self.source = source
+                self.static_variables = []
+                self.global_variables = []
+                self.in_function = False
+                self.current_function = None
+                self.in_struct = False  # 構造体定義内かどうか
+            
+            def visit_FuncDef(self, node):
+                # 関数内部の処理
+                old_in_function = self.in_function
+                old_function = self.current_function
+                self.in_function = True
+                self.current_function = node.decl.name if node.decl else None
+                self.generic_visit(node)
+                self.in_function = old_in_function
+                self.current_function = old_function
+            
+            def visit_Struct(self, node):
+                # 構造体定義内は処理しない（メンバーを変数として抽出しない）
+                old_in_struct = self.in_struct
+                self.in_struct = True
+                self.generic_visit(node)
+                self.in_struct = old_in_struct
+            
+            def visit_Decl(self, node):
+                # 構造体定義内のメンバーは除外
+                if self.in_struct:
+                    self.generic_visit(node)
+                    return
+                
+                if node.name and not isinstance(node.type, c_ast.FuncDecl):
+                    # 変数宣言のみ処理
+                    is_static = 'static' in (node.storage or [])
+                    is_extern = 'extern' in (node.storage or [])
+                    
+                    # 関数内のstatic変数は外部からアクセスできないので除外
+                    if self.in_function:
+                        # 関数内のstatic変数はスコープ外からアクセスできないので収集しない
+                        self.generic_visit(node)
+                        return
+                    
+                    # 型情報を取得
+                    var_type = self._get_type_string(node.type)
+                    is_array = isinstance(node.type, c_ast.ArrayDecl)
+                    array_size = self._get_array_size(node.type) if is_array else None
+                    is_struct = 'struct' in var_type or self._is_struct_type(node.type)
+                    struct_type = self._get_struct_type(node.type) if is_struct else ""
+                    
+                    # 初期値を取得
+                    initial_value = self._get_initial_value(node.init) if node.init else ""
+                    
+                    # 定義文を生成
+                    definition = self._generate_definition(node, var_type, is_array, array_size)
+                    
+                    var_info = VariableDeclInfo(
+                        name=node.name,
+                        var_type=var_type,
+                        is_extern=is_extern,
+                        definition=definition,
+                        is_static=is_static,
+                        is_array=is_array,
+                        array_size=array_size,
+                        is_struct=is_struct,
+                        struct_type=struct_type,
+                        initial_value=initial_value
+                    )
+                    
+                    # グローバルスコープの変数のみ収集
+                    if is_static:
+                        self.static_variables.append(var_info)
+                    elif not is_extern:
+                        self.global_variables.append(var_info)
+                
+                self.generic_visit(node)
+            
+            def _get_type_string(self, node) -> str:
+                """型ノードから型文字列を取得"""
+                if isinstance(node, c_ast.TypeDecl):
+                    return self._get_type_string(node.type)
+                elif isinstance(node, c_ast.IdentifierType):
+                    return ' '.join(node.names)
+                elif isinstance(node, c_ast.PtrDecl):
+                    return self._get_type_string(node.type) + '*'
+                elif isinstance(node, c_ast.ArrayDecl):
+                    return self._get_type_string(node.type)
+                elif isinstance(node, c_ast.Struct):
+                    return f"struct {node.name}" if node.name else "struct"
+                elif isinstance(node, c_ast.Enum):
+                    return f"enum {node.name}" if node.name else "enum"
+                else:
+                    return "unknown"
+            
+            def _get_array_size(self, node) -> int:
+                """配列サイズを取得"""
+                if isinstance(node, c_ast.ArrayDecl):
+                    if node.dim:
+                        if isinstance(node.dim, c_ast.Constant):
+                            try:
+                                return int(node.dim.value)
+                            except:
+                                return 0
+                return 0
+            
+            def _is_struct_type(self, node) -> bool:
+                """構造体型かどうか判定"""
+                if isinstance(node, c_ast.TypeDecl):
+                    return self._is_struct_type(node.type)
+                elif isinstance(node, c_ast.Struct):
+                    return True
+                elif isinstance(node, c_ast.ArrayDecl):
+                    return self._is_struct_type(node.type)
+                elif isinstance(node, c_ast.PtrDecl):
+                    return self._is_struct_type(node.type)
+                return False
+            
+            def _get_struct_type(self, node) -> str:
+                """構造体の型名を取得"""
+                if isinstance(node, c_ast.TypeDecl):
+                    return self._get_struct_type(node.type)
+                elif isinstance(node, c_ast.Struct):
+                    return node.name if node.name else ""
+                elif isinstance(node, c_ast.ArrayDecl):
+                    return self._get_struct_type(node.type)
+                elif isinstance(node, c_ast.PtrDecl):
+                    return self._get_struct_type(node.type)
+                elif isinstance(node, c_ast.IdentifierType):
+                    # typedef名の場合
+                    return ' '.join(node.names)
+                return ""
+            
+            def _get_initial_value(self, init_node) -> str:
+                """初期値を文字列で取得"""
+                if init_node is None:
+                    return ""
+                if isinstance(init_node, c_ast.Constant):
+                    return init_node.value
+                elif isinstance(init_node, c_ast.InitList):
+                    # 配列・構造体の初期化リスト
+                    values = []
+                    for expr in init_node.exprs:
+                        values.append(self._get_initial_value(expr))
+                    return "{" + ", ".join(values) + "}"
+                elif isinstance(init_node, c_ast.UnaryOp):
+                    return init_node.op + self._get_initial_value(init_node.expr)
+                elif isinstance(init_node, c_ast.BinaryOp):
+                    return f"{self._get_initial_value(init_node.left)} {init_node.op} {self._get_initial_value(init_node.right)}"
+                elif isinstance(init_node, c_ast.ID):
+                    return init_node.name
+                elif isinstance(init_node, c_ast.NamedInitializer):
+                    # .member = value 形式
+                    names = [n.name if hasattr(n, 'name') else str(n) for n in init_node.name]
+                    return f".{'.'.join(names)} = {self._get_initial_value(init_node.expr)}"
+                else:
+                    return str(init_node)
+            
+            def _generate_definition(self, node, var_type: str, is_array: bool, array_size: int) -> str:
+                """変数定義文を生成"""
+                storage = ' '.join(node.storage) + ' ' if node.storage else ''
+                if is_array and array_size:
+                    return f"{storage}{var_type} {node.name}[{array_size}];"
+                elif is_array:
+                    return f"{storage}{var_type} {node.name}[];"
+                else:
+                    return f"{storage}{var_type} {node.name};"
+        
+        visitor = DetailedVarVisitor(source_code)
+        visitor.visit(ast)
+        
+        return visitor.static_variables, visitor.global_variables
     
     def _extract_enums(self, ast) -> tuple:
         """

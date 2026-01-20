@@ -82,8 +82,8 @@ class UnityTestGenerator:
         # 6. テスト関数群
         test_code.test_functions = self._generate_all_test_functions(truth_table, parsed_data)
         
-        # 7. setUp/tearDown
-        test_code.setup_teardown = self._generate_setup_teardown()
+        # 7. setUp/tearDown (v5.0.0: static/global変数初期化追加)
+        test_code.setup_teardown = self._generate_setup_teardown(parsed_data)
         
         # 8. v2.2: テスト対象関数の本体を抽出して追加
         if self.include_target_function and source_code:
@@ -155,8 +155,8 @@ class UnityTestGenerator:
             parts.append("\n// ===== テスト関数群 =====")
             parts.append(test_functions)
         
-        # setUp/tearDown
-        setup_teardown = self._generate_setup_teardown()
+        # setUp/tearDown (v5.0.0: static/global変数初期化追加)
+        setup_teardown = self._generate_setup_teardown(parsed_data)
         if setup_teardown:
             parts.append("\n// ===== setUp/tearDown =====")
             parts.append(setup_teardown)
@@ -521,9 +521,12 @@ class UnityTestGenerator:
         
         return '\n'.join(lines)
     
-    def _generate_setup_teardown(self) -> str:
+    def _generate_setup_teardown(self, parsed_data: ParsedData = None) -> str:
         """
-        setUp/tearDown関数を生成
+        setUp/tearDown関数を生成 (v5.0.0: static/global変数初期化追加)
+        
+        Args:
+            parsed_data: 解析済みデータ（v5.0.0で追加）
         
         Returns:
             setUp/tearDown関数
@@ -537,6 +540,16 @@ class UnityTestGenerator:
         lines.append("void setUp(void) {")
         lines.append("    // モックをリセット")
         lines.append("    reset_all_mocks();")
+        
+        # v5.0.0: static変数とグローバル変数の初期化
+        if parsed_data:
+            init_code = self._generate_variable_init_code(parsed_data)
+            if init_code:
+                lines.append("")
+                lines.append("    // static変数・グローバル変数の初期化")
+                for line in init_code:
+                    lines.append(f"    {line}")
+        
         lines.append("}")
         lines.append("")
         lines.append("/**")
@@ -545,6 +558,167 @@ class UnityTestGenerator:
         lines.append("void tearDown(void) {")
         lines.append("    // クリーンアップ処理")
         lines.append("}")
+        
+        return '\n'.join(lines)
+    
+    def _generate_variable_init_code(self, parsed_data: ParsedData) -> list:
+        """
+        static変数とグローバル変数の初期化コードを生成 (v5.0.0)
+        
+        Args:
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            初期化コード行のリスト
+        """
+        init_lines = []
+        
+        # static変数の初期化
+        if hasattr(parsed_data, 'static_variables') and parsed_data.static_variables:
+            for var in parsed_data.static_variables:
+                init_line = self._generate_single_var_init(var, parsed_data)
+                if init_line:
+                    init_lines.append(init_line)
+        
+        # グローバル変数の初期化
+        if hasattr(parsed_data, 'global_variable_infos') and parsed_data.global_variable_infos:
+            for var in parsed_data.global_variable_infos:
+                init_line = self._generate_single_var_init(var, parsed_data)
+                if init_line:
+                    init_lines.append(init_line)
+        
+        # 従来のglobal_variables（名前のみ）も処理
+        # ただし、static_variablesとglobal_variable_infosで処理済みの場合は除外
+        if hasattr(parsed_data, 'global_variables') and parsed_data.global_variables:
+            # 既に処理済みの変数名を収集
+            processed_names = set()
+            if hasattr(parsed_data, 'global_variable_infos'):
+                processed_names = {v.name for v in parsed_data.global_variable_infos}
+            if hasattr(parsed_data, 'static_variables'):
+                processed_names |= {v.name for v in parsed_data.static_variables}
+            
+            # 構造体のメンバー名を収集（これらは除外）
+            struct_member_names = set()
+            if hasattr(parsed_data, 'struct_definitions'):
+                for struct_def in parsed_data.struct_definitions:
+                    if hasattr(struct_def, 'members'):
+                        for member in struct_def.members:
+                            if hasattr(member, 'name'):
+                                struct_member_names.add(member.name)
+            
+            for var_name in parsed_data.global_variables:
+                # 既に処理済み、または構造体メンバーの場合は除外
+                if var_name in processed_names:
+                    continue
+                if var_name in struct_member_names:
+                    continue
+                # 型情報がない場合は0で初期化
+                init_lines.append(f"{var_name} = 0;")
+        
+        return init_lines
+    
+    def _generate_single_var_init(self, var, parsed_data: ParsedData) -> str:
+        """
+        単一変数の初期化コードを生成 (v5.0.0)
+        
+        Args:
+            var: VariableDeclInfo
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            初期化コード行
+        """
+        var_name = var.name
+        var_type = var.var_type
+        
+        # extern変数は初期化しない
+        if var.is_extern:
+            return None
+        
+        # 配列の場合
+        if var.is_array:
+            if var.array_size and var.array_size > 0:
+                return f"memset({var_name}, 0, sizeof({var_name}));"
+            else:
+                return f"memset({var_name}, 0, sizeof({var_name}));"
+        
+        # 構造体の場合
+        if var.is_struct or self._is_struct_type(var_type, parsed_data):
+            return f"memset(&{var_name}, 0, sizeof({var_name}));"
+        
+        # ポインタの場合
+        if '*' in var_type:
+            return f"{var_name} = NULL;"
+        
+        # 基本型の場合
+        if self._is_integer_type(var_type):
+            return f"{var_name} = 0;"
+        elif self._is_float_type(var_type):
+            return f"{var_name} = 0.0;"
+        elif 'char' in var_type.lower():
+            return f"{var_name} = '\\0';"
+        else:
+            # 不明な型は0で初期化
+            return f"{var_name} = 0;"
+    
+    def _is_struct_type(self, var_type: str, parsed_data: ParsedData) -> bool:
+        """
+        型名が構造体かどうか判定 (v5.0.0)
+        
+        Args:
+            var_type: 型名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            構造体ならTrue
+        """
+        if 'struct' in var_type:
+            return True
+        
+        # typedef された構造体名をチェック
+        clean_type = var_type.replace('*', '').replace('const', '').strip()
+        
+        # struct_definitionsからチェック
+        if hasattr(parsed_data, 'struct_definitions'):
+            for struct_def in parsed_data.struct_definitions:
+                if struct_def.name == clean_type or struct_def.original_name == clean_type:
+                    return True
+        
+        # typedefsからチェック
+        if hasattr(parsed_data, 'typedefs'):
+            for typedef in parsed_data.typedefs:
+                if hasattr(typedef, 'name') and typedef.name == clean_type:
+                    if hasattr(typedef, 'original_type') and 'struct' in str(typedef.original_type):
+                        return True
+        
+        return False
+    
+    def _is_integer_type(self, var_type: str) -> bool:
+        """整数型かどうか判定"""
+        int_types = [
+            'int', 'short', 'long', 'char',
+            'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+            'int8_t', 'int16_t', 'int32_t', 'int64_t',
+            'size_t', 'ssize_t', 'ptrdiff_t',
+            'unsigned', 'signed',
+            'BYTE', 'WORD', 'DWORD', 'BOOL',
+            # 組込み系でよく使われる型
+            'U8', 'U16', 'U32', 'U64',
+            'S8', 'S16', 'S32', 'S64',
+        ]
+        clean_type = var_type.replace('unsigned', '').replace('signed', '').strip()
+        for itype in int_types:
+            if itype in clean_type:
+                return True
+        return False
+    
+    def _is_float_type(self, var_type: str) -> bool:
+        """浮動小数点型かどうか判定"""
+        float_types = ['float', 'double', 'long double']
+        for ftype in float_types:
+            if ftype in var_type:
+                return True
+        return False
         
         return '\n'.join(lines)
     
