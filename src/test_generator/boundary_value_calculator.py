@@ -283,6 +283,28 @@ class BoundaryValueCalculator:
                     test_str = 'a' * (value + 1)
                     return f'{var_name} = "{test_str}";  // strlen > {value}を満たす'
         
+        # v4.8.6: strcmp(var, "string") == 0 のような条件の特別処理
+        strcmp_match = re.search(r'strcmp\s*\(\s*(\w+)\s*,\s*"([^"]*)"\s*\)\s*(==|!=)\s*0', expression)
+        if strcmp_match:
+            var_name = strcmp_match.group(1)
+            compare_str = strcmp_match.group(2)
+            operator = strcmp_match.group(3)
+            
+            if operator == '==':
+                if truth == 'T':
+                    # 真: strcmp == 0 → 同じ文字列
+                    return f'{var_name} = "{compare_str}";  // strcmp == 0を満たす'
+                else:
+                    # 偽: strcmp != 0 → 異なる文字列
+                    return f'{var_name} = "different_string";  // strcmp != 0を満たす'
+            elif operator == '!=':
+                if truth == 'T':
+                    # 真: strcmp != 0 → 異なる文字列
+                    return f'{var_name} = "different_string";  // strcmp != 0を満たす'
+                else:
+                    # 偽: strcmp == 0 → 同じ文字列
+                    return f'{var_name} = "{compare_str}";  // strcmp == 0を満たす'
+        
         comparison = self.parse_comparison(expression)
         
         if comparison:

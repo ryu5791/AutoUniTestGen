@@ -217,6 +217,7 @@ class TestFunctionGenerator:
         変数初期化コードを生成
         
         v4.2.0: ローカル変数、構造体メンバー、数値リテラル対応
+        v4.8.6: const char*型パラメータの初期化を配列形式に変更
         
         Args:
             test_case: テストケース
@@ -242,6 +243,9 @@ class TestFunctionGenerator:
                 else:
                     lines.append(f"    {return_type} result = 0;")
         
+        # v4.8.6: 条件に応じた初期値を事前計算（const char*用）
+        param_init_values = self._precompute_param_init_values(test_case, parsed_data)
+        
         # パラメータの初期化
         if parsed_data.function_info and parsed_data.function_info.parameters:
             for param in parsed_data.function_info.parameters:
@@ -258,6 +262,31 @@ class TestFunctionGenerator:
                         else:
                             lines.append(f"    {param_type} {param_name} = {value};")
                         continue
+                
+                # v4.8.6: const char*型の特別処理
+                if 'const' in param_type and 'char' in param_type and '*' in param_type:
+                    # 事前計算された初期値があれば使用
+                    if param_name in param_init_values:
+                        init_value = param_init_values[param_name]
+                        # 文字列リテラルの場合は配列形式で宣言
+                        if init_value.startswith('"'):
+                            lines.append(f"    const char {param_name}[] = {init_value};")
+                        elif init_value == 'NULL':
+                            # NULLの場合はポインタとして宣言（テスト目的でNULLを渡す場合）
+                            lines.append(f"    const char* {param_name} = NULL;")
+                        elif init_value.startswith('{') and init_value.endswith('}'):
+                            # 配列初期化形式の場合はそのまま使用
+                            lines.append(f"    const char {param_name}[] = {init_value};")
+                        elif init_value.isdigit() or (init_value.startswith('-') and init_value[1:].isdigit()):
+                            # 数値の場合は文字コードとして配列初期化
+                            lines.append(f"    const char {param_name}[] = {{{init_value}, 0}};")
+                        else:
+                            # その他（文字列として扱う）
+                            lines.append(f"    const char {param_name}[] = \"{init_value}\";")
+                    else:
+                        # デフォルトは空文字列
+                        lines.append(f"    const char {param_name}[] = \"\";")
+                    continue
                 
                 # デフォルト値を設定
                 if '*' in param_type:
@@ -284,8 +313,17 @@ class TestFunctionGenerator:
         condition_expr = matching_condition.expression
         
         # 条件タイプに応じて初期化コードを生成
+        # v4.8.6: const char*型のパラメータへの代入はスキップ（既に宣言時に初期化済み）
+        const_char_params = set()
+        if parsed_data.function_info and parsed_data.function_info.parameters:
+            for param in parsed_data.function_info.parameters:
+                param_type = param.get('type', '')
+                if 'const' in param_type and 'char' in param_type and '*' in param_type:
+                    const_char_params.add(param.get('name', ''))
+        
         if matching_condition.type == ConditionType.SIMPLE_IF:
             init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
+            init = self._filter_const_char_init(init, const_char_params)
             init = self._process_init_code(init, parsed_data, lines, condition_expr)
             if init:
                 self._append_init_line(init, lines)
@@ -293,6 +331,7 @@ class TestFunctionGenerator:
         elif matching_condition.type == ConditionType.OR_CONDITION:
             init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
+                init = self._filter_const_char_init(init, const_char_params)
                 init = self._process_init_code(init, parsed_data, lines, condition_expr)
                 if init:
                     self._append_init_line(init, lines)
@@ -300,18 +339,196 @@ class TestFunctionGenerator:
         elif matching_condition.type == ConditionType.AND_CONDITION:
             init_list = self._generate_and_condition_init(matching_condition, test_case.truth, parsed_data)
             for init in init_list:
+                init = self._filter_const_char_init(init, const_char_params)
                 init = self._process_init_code(init, parsed_data, lines, condition_expr)
                 if init:
                     self._append_init_line(init, lines)
         
         elif matching_condition.type == ConditionType.SWITCH:
             init = self._generate_switch_init(matching_condition, test_case, parsed_data)
+            init = self._filter_const_char_init(init, const_char_params)
             init = self._process_init_code(init, parsed_data, lines, condition_expr)
             if init:
                 self._append_init_line(init, lines)
         
         lines.append("")
         return '\n'.join(lines)
+    
+    def _precompute_param_init_values(self, test_case: TestCase, parsed_data: ParsedData) -> Dict[str, str]:
+        """
+        const char*型パラメータの初期値を事前計算（v4.8.6追加）
+        
+        AND条件: 両方を満たす値が必要（後の条件を優先）
+        OR条件: 真の条件の値を優先
+        
+        Args:
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            パラメータ名 -> 初期値のマッピング
+        """
+        result = {}
+        
+        # 対応する条件を検索
+        matching_condition = None
+        for cond in parsed_data.conditions:
+            if cond.expression in test_case.condition:
+                matching_condition = cond
+                break
+        
+        if not matching_condition:
+            return result
+        
+        # 条件タイプに応じて初期化値を取得
+        if matching_condition.type == ConditionType.SIMPLE_IF:
+            init = self._generate_simple_condition_init(matching_condition, test_case.truth, parsed_data)
+            self._extract_param_value(init, result)
+        
+        elif matching_condition.type == ConditionType.AND_CONDITION:
+            # AND条件: 全ての条件を満たす必要がある → 後の条件の値を優先
+            # (両方の条件を満たす値が必要なので、より制約の強い後の条件を使用)
+            init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
+            # 後の条件から順に処理（後の値が優先される）
+            for init in init_list:
+                self._extract_param_value_overwrite(init, result)
+        
+        elif matching_condition.type == ConditionType.OR_CONDITION:
+            # OR条件: いずれかの条件を満たせばよい → 真の条件の値を優先
+            init_list = self._generate_or_condition_init(matching_condition, test_case.truth, parsed_data)
+            true_result = {}
+            false_result = {}
+            truth_str = test_case.truth
+            for i, init in enumerate(init_list):
+                if i < len(truth_str):
+                    if truth_str[i] == 'T':
+                        self._extract_param_value(init, true_result)
+                    else:
+                        self._extract_param_value(init, false_result)
+            # 真の条件の値を優先
+            for key, value in true_result.items():
+                result[key] = value
+            for key, value in false_result.items():
+                if key not in result:
+                    result[key] = value
+        
+        elif matching_condition.type == ConditionType.SWITCH:
+            init = self._generate_switch_init(matching_condition, test_case, parsed_data)
+            self._extract_param_value(init, result)
+        
+        return result
+    
+    def _extract_param_value_overwrite(self, init: Optional[str], result: Dict[str, str]) -> None:
+        """
+        初期化コードからパラメータ名と値を抽出（上書きあり版）（v4.8.6追加）
+        
+        Args:
+            init: 初期化コード
+            result: 結果を格納する辞書（既存の値は上書きされる）
+        """
+        if not init or init.startswith('//'):
+            return
+        
+        # "変数[n] = 値" 形式（switch文用）
+        array_match = re.match(r'(\w+)\[(\d+)\]\s*=\s*(.+?)\s*;', init)
+        if array_match:
+            var_name = array_match.group(1).strip()
+            index = int(array_match.group(2))
+            value = array_match.group(3).strip()
+            if '//' in value:
+                value = value.split('//')[0].strip()
+            if index == 0:
+                if value.isdigit():
+                    result[var_name] = f'{{{value}, 0}}'
+                elif value.startswith("'") and value.endswith("'"):
+                    char_val = value[1:-1]
+                    result[var_name] = f'"{char_val}"'
+                else:
+                    result[var_name] = f'{{{value}, 0}}'
+            return
+        
+        # "変数 = 値" 形式から抽出
+        match = re.match(r'(\w+)\s*=\s*(.+?)\s*;', init)
+        if match:
+            var_name = match.group(1).strip()
+            value = match.group(2).strip()
+            if '//' in value:
+                value = value.split('//')[0].strip()
+            result[var_name] = value  # 上書き
+    
+    def _extract_param_value(self, init: Optional[str], result: Dict[str, str]) -> None:
+        """
+        初期化コードからパラメータ名と値を抽出（v4.8.6追加）
+        
+        Args:
+            init: 初期化コード（例: 'command = "test_string";' または 'command[0] = 999;'）
+            result: 結果を格納する辞書
+        """
+        if not init or init.startswith('//'):
+            return
+        
+        # "変数[n] = 値" 形式（switch文用）
+        array_match = re.match(r'(\w+)\[(\d+)\]\s*=\s*(.+?)\s*;', init)
+        if array_match:
+            var_name = array_match.group(1).strip()
+            index = int(array_match.group(2))
+            value = array_match.group(3).strip()
+            # コメントを除去
+            if '//' in value:
+                value = value.split('//')[0].strip()
+            # 既に値が設定されている場合はスキップ（最初の値を優先）
+            if var_name in result:
+                return
+            # 配列要素への代入は、その要素を持つ配列として初期化
+            # 例: command[0] = 'f' -> command = "f" または command = {'f', 0}
+            if index == 0:
+                # 数値の場合は文字コードとして扱う
+                if value.isdigit():
+                    result[var_name] = f'{{{value}, 0}}'
+                elif value.startswith("'") and value.endswith("'"):
+                    # 文字リテラルの場合
+                    char_val = value[1:-1]
+                    result[var_name] = f'"{char_val}"'
+                else:
+                    result[var_name] = f'{{{value}, 0}}'
+            return
+        
+        # "変数 = 値" 形式から抽出
+        match = re.match(r'(\w+)\s*=\s*(.+?)\s*;', init)
+        if match:
+            var_name = match.group(1).strip()
+            value = match.group(2).strip()
+            # コメントを除去
+            if '//' in value:
+                value = value.split('//')[0].strip()
+            # 既に値が設定されている場合はスキップ（最初の値を優先）
+            if var_name in result:
+                return
+            result[var_name] = value
+    
+    def _filter_const_char_init(self, init: Optional[str], const_char_params: set) -> Optional[str]:
+        """
+        const char*型パラメータへの代入をフィルタ（v4.8.6追加）
+        
+        Args:
+            init: 初期化コード
+            const_char_params: const char*型パラメータ名のセット
+        
+        Returns:
+            フィルタ後の初期化コード（const char*への代入はNone）
+        """
+        if not init or init.startswith('//'):
+            return init
+        
+        # "変数 = 値" または "変数[n] = 値" 形式から変数名を抽出
+        match = re.match(r'(\w+)(?:\[\d+\])?\s*=', init)
+        if match:
+            var_name = match.group(1).strip()
+            if var_name in const_char_params:
+                # const char*型パラメータへの代入はスキップ（既に宣言時に初期化済み）
+                return None
+        
+        return init
     
     def _process_init_code(self, init: Optional[str], parsed_data: ParsedData, lines: List[str], 
                             condition_expr: str = None) -> Optional[str]:
