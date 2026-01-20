@@ -240,6 +240,39 @@ class CCodeParser:
         """
         from pycparser import c_ast
         
+        def get_type_str(type_node) -> str:
+            """型ノードから型文字列を取得（const修飾子、ポインタ対応）"""
+            if isinstance(type_node, c_ast.TypeDecl):
+                # const修飾子を取得
+                quals = getattr(type_node, 'quals', []) or []
+                base_type = get_type_str(type_node.type)
+                if 'const' in quals:
+                    return f'const {base_type}'
+                return base_type
+            elif isinstance(type_node, c_ast.IdentifierType):
+                return ' '.join(type_node.names)
+            elif isinstance(type_node, c_ast.PtrDecl):
+                # ポインタの場合、const修飾子をチェック
+                quals = getattr(type_node, 'quals', []) or []
+                base_type = get_type_str(type_node.type)
+                ptr_type = base_type + '*'
+                if 'const' in quals:
+                    ptr_type = ptr_type + ' const'
+                return ptr_type
+            elif isinstance(type_node, c_ast.ArrayDecl):
+                return get_type_str(type_node.type) + '*'
+            elif isinstance(type_node, c_ast.Struct):
+                # 構造体型
+                return f'struct {type_node.name}' if type_node.name else 'struct'
+            elif isinstance(type_node, c_ast.Enum):
+                # 列挙型
+                return f'enum {type_node.name}' if type_node.name else 'enum'
+            elif isinstance(type_node, c_ast.FuncDecl):
+                # 関数ポインタ型
+                return 'void*'  # 簡易実装
+            else:
+                return 'int'
+        
         class FunctionInfoVisitor(c_ast.NodeVisitor):
             def __init__(self, target):
                 self.target = target
@@ -250,37 +283,21 @@ class CCodeParser:
                 
                 # 対象関数をチェック
                 if self.target is None or func_name == self.target:
-                    # 戻り値の型を取得
+                    # 戻り値の型を取得（ポインタ対応）
                     return_type = "void"
                     if hasattr(node.decl.type, 'type'):
-                        type_node = node.decl.type.type
-                        if hasattr(type_node, 'names'):
-                            return_type = ' '.join(type_node.names)
-                        elif hasattr(type_node, 'type') and hasattr(type_node.type, 'names'):
-                            # ポインタ型などの場合
-                            return_type = ' '.join(type_node.type.names)
-                            if hasattr(type_node, 'quals') and type_node.quals:
-                                return_type = ' '.join(type_node.quals) + ' ' + return_type
-                            # ポインタの数を追加
-                            ptr_count = 0
-                            temp = type_node
-                            while hasattr(temp, 'type'):
-                                if temp.__class__.__name__ == 'PtrDecl':
-                                    ptr_count += 1
-                                temp = temp.type if hasattr(temp, 'type') else None
-                                if temp is None:
-                                    break
-                            return_type += '*' * ptr_count
+                        return_type = get_type_str(node.decl.type.type)
                     
                     # パラメータを取得
                     parameters = []
                     if node.decl.type.args:
                         for param in node.decl.type.args.params:
                             if hasattr(param, 'name') and param.name:
-                                param_type = "int"  # 簡易実装
-                                if hasattr(param, 'type'):
-                                    if hasattr(param.type, 'type') and hasattr(param.type.type, 'names'):
-                                        param_type = ' '.join(param.type.type.names)
+                                # v4.8.5: 正確な型取得（const char* 等に対応）
+                                param_type = get_type_str(param.type) if hasattr(param, 'type') else 'int'
+                                # void型単独の場合はスキップ
+                                if param_type == 'void' and (param.name is None or param.name == ''):
+                                    continue
                                 parameters.append({
                                     'name': param.name,
                                     'type': param_type

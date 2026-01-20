@@ -286,6 +286,8 @@ class ValueResolver:
             ("256", "UtD1(=255)と異なる値")
             >>> resolver.resolve_different_value("3", max_value=3)  # 2ビットフィールド
             ("2", "3と異なる値（最大値3考慮）")
+            >>> resolver.resolve_different_value("NULL", var_type="const char*")
+            ("\"test_string\"", "NULLと異なる値")
         """
         if not value:
             # v4.3.0: 型に応じたフォールバック値を使用
@@ -293,6 +295,21 @@ class ValueResolver:
             return (fallback, "不明な値と異なる値")
         
         value = value.strip()
+        
+        # v4.8.5: NULLの場合の特別処理（ポインタ型）
+        if value == 'NULL':
+            # ポインタ型（char*等）の場合は文字列リテラルを返す
+            if var_type and '*' in var_type:
+                base_type = var_type.replace('const ', '').replace('volatile ', '').replace('*', '').strip()
+                if 'char' in base_type:
+                    # char*型は文字列リテラルを返す
+                    return ('"test_string"', "NULLと異なる値")
+                else:
+                    # その他のポインタ型はダミーアドレスを返す（キャストが必要）
+                    return (f'({var_type})0x12345678', "NULLと異なる値")
+            else:
+                # 型情報がない場合は汎用的な非NULL値
+                return ('(void*)0x12345678', "NULLと異なる値")
         
         # 1. 数値の場合
         if self.is_numeric(value):
@@ -655,19 +672,26 @@ class ValueResolver:
         # 配列インデックスを除去
         root_var = re.sub(r'\[\d+\]', '', root_var)
         
-        # 1. グローバル変数から検索
+        # 1. 関数パラメータから検索（v4.8.5追加）
+        if hasattr(self.parsed_data, 'function_info') and self.parsed_data.function_info:
+            if hasattr(self.parsed_data.function_info, 'parameters'):
+                for param in self.parsed_data.function_info.parameters:
+                    if param.get('name') == root_var:
+                        return param.get('type')
+        
+        # 2. グローバル変数から検索
         if hasattr(self.parsed_data, 'variables') and self.parsed_data.variables:
             for var_info in self.parsed_data.variables:
                 if var_info.name == root_var:
                     return var_info.var_type
         
-        # 2. ローカル変数から検索
+        # 3. ローカル変数から検索
         if hasattr(self.parsed_data, 'local_variables') and self.parsed_data.local_variables:
             for var_name, var_info in self.parsed_data.local_variables.items():
                 if var_name == root_var:
                     return var_info.var_type
         
-        # 3. 構造体メンバーの場合、末端メンバーの型を取得
+        # 4. 構造体メンバーの場合、末端メンバーの型を取得
         if '.' in var_path:
             member_type = self._get_struct_member_type(var_path)
             if member_type:

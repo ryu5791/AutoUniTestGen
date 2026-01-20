@@ -224,6 +224,7 @@ class BoundaryValueCalculator:
         
         v3.3.0追加: parsed_dataを使用してenum/マクロ値を解決
         v4.2.0修正: 数値リテラルや関数呼び出し含む式への対応を強化
+        v4.8.5追加: strlen()を含む条件の特別処理
         
         Args:
             expression: 条件式
@@ -233,6 +234,55 @@ class BoundaryValueCalculator:
         Returns:
             テスト値の設定コード（例: "v10 = 31"）
         """
+        # v4.8.5: strlen(var) > 0 のような条件の特別処理
+        # 括弧で囲まれている場合にも対応（re.searchを使用）
+        strlen_match = re.search(r'strlen\s*\(\s*(\w+)\s*\)\s*(>|>=|==|!=|<|<=)\s*(\d+)', expression)
+        if strlen_match:
+            var_name = strlen_match.group(1)
+            operator = strlen_match.group(2)
+            value = int(strlen_match.group(3))
+            
+            # strlen(var) > 0 または strlen(var) >= 1 の場合
+            if (operator == '>' and value == 0) or (operator == '>=' and value == 1):
+                if truth == 'T':
+                    # 真: 長さ > 0 → 空でない文字列
+                    return f'{var_name} = "test_string";  // strlen > 0を満たす'
+                else:
+                    # 偽: 長さ == 0 → 空文字列
+                    return f'{var_name} = "";  // strlen == 0を満たす'
+            elif operator == '==' and value == 0:
+                if truth == 'T':
+                    # 真: 長さ == 0 → 空文字列
+                    return f'{var_name} = "";  // strlen == 0を満たす'
+                else:
+                    # 偽: 長さ != 0 → 空でない文字列
+                    return f'{var_name} = "test_string";  // strlen != 0を満たす'
+            elif operator == '!=' and value == 0:
+                if truth == 'T':
+                    # 真: 長さ != 0 → 空でない文字列
+                    return f'{var_name} = "test_string";  // strlen != 0を満たす'
+                else:
+                    # 偽: 長さ == 0 → 空文字列
+                    return f'{var_name} = "";  // strlen == 0を満たす'
+            elif operator == '>=' and value > 1:
+                if truth == 'T':
+                    # 真: 長さ >= N → N文字以上の文字列
+                    test_str = 'a' * value
+                    return f'{var_name} = "{test_str}";  // strlen >= {value}を満たす'
+                else:
+                    # 偽: 長さ < N → N-1文字以下の文字列
+                    test_str = 'a' * max(0, value - 1)
+                    return f'{var_name} = "{test_str}";  // strlen < {value}を満たす'
+            elif operator == '<=' and value >= 0:
+                if truth == 'T':
+                    # 真: 長さ <= N → N文字以下の文字列
+                    test_str = 'a' * value
+                    return f'{var_name} = "{test_str}";  // strlen <= {value}を満たす'
+                else:
+                    # 偽: 長さ > N → N+1文字以上の文字列
+                    test_str = 'a' * (value + 1)
+                    return f'{var_name} = "{test_str}";  // strlen > {value}を満たす'
+        
         comparison = self.parse_comparison(expression)
         
         if comparison:

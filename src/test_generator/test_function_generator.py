@@ -389,6 +389,18 @@ class TestFunctionGenerator:
         if clean_value.startswith('0x') or clean_value.startswith('0X'):
             return None
         
+        # v4.8.5: 文字列リテラルの場合はスキップ（"..." で囲まれた値）
+        if clean_value.startswith('"') and clean_value.endswith('"'):
+            return None
+        
+        # v4.8.5: NULLの場合はスキップ
+        if clean_value == 'NULL':
+            return None
+        
+        # v4.8.5: キャスト式の場合はスキップ（例: (const char*)0x12345678）
+        if clean_value.startswith('(') and ')' in clean_value:
+            return None
+        
         # 構造体メンバーパスの場合、ルート変数をチェック
         if '.' in clean_value:
             root_var = clean_value.split('.')[0]
@@ -748,6 +760,20 @@ class TestFunctionGenerator:
         # v3.3.0: ValueResolverを使用
         value_resolver = ValueResolver(parsed_data)
         
+        # v4.8.5: 標準ライブラリ関数名（変数として誤検出されるのを防止）
+        stdlib_funcs = {
+            'strlen', 'strcmp', 'strncmp', 'strcpy', 'strncpy', 'strcat', 'strncat',
+            'memcpy', 'memset', 'memcmp', 'memmove',
+            'printf', 'sprintf', 'fprintf', 'scanf', 'sscanf', 'fscanf',
+            'malloc', 'calloc', 'realloc', 'free',
+            'atoi', 'atol', 'atof', 'strtol', 'strtoul', 'strtod',
+            'abs', 'labs', 'fabs',
+            'isdigit', 'isalpha', 'isalnum', 'isspace', 'isupper', 'islower',
+            'toupper', 'tolower',
+            'fopen', 'fclose', 'fread', 'fwrite', 'fgets', 'fputs', 'fflush',
+            'sizeof', 'offsetof'
+        }
+        
         # 各条件に対して値を設定
         for i, cond in enumerate(conditions):
             if i < len(truth):
@@ -766,7 +792,16 @@ class TestFunctionGenerator:
                     # デフォルト値
                     variables = self.boundary_calc.extract_variables(cond)
                     if variables:
-                        var = variables[0]
+                        # v4.8.5: 標準ライブラリ関数名を除外
+                        valid_vars = [v for v in variables if v not in stdlib_funcs]
+                        if not valid_vars:
+                            # すべての変数が関数名の場合、条件式に含まれる関数のモック設定を提案
+                            func_names = [v for v in variables if v in stdlib_funcs]
+                            if func_names:
+                                init_list.append(f"// {func_names[0]}() の戻り値でテスト条件が決まります")
+                            continue
+                        
+                        var = valid_vars[0]
                         
                         # 関数呼び出しかチェック
                         if self._is_function_call_pattern(var):
