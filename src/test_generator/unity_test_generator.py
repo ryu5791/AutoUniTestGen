@@ -578,7 +578,7 @@ class UnityTestGenerator:
     
     def _generate_variable_init_code(self, parsed_data: ParsedData) -> list:
         """
-        static変数とグローバル変数の初期化コードを生成 (v5.0.0, v5.0.3: パラメータ除外修正)
+        static変数とグローバル変数の初期化コードを生成 (v5.0.4: 全関数パラメータ除外)
         
         Args:
             parsed_data: 解析済みデータ
@@ -588,24 +588,34 @@ class UnityTestGenerator:
         """
         init_lines = []
         
-        # v5.0.3: 関数パラメータ名を収集（これらは除外対象）
+        # v5.0.4: 全関数のパラメータ名を収集（これらは除外対象）
         param_names = set()
         if hasattr(parsed_data, 'function_signatures') and parsed_data.function_signatures:
             for func_name, sig in parsed_data.function_signatures.items():
+                # sigがオブジェクト形式の場合
                 if hasattr(sig, 'parameters'):
                     for param in sig.parameters:
-                        if hasattr(param, 'name') and param.name:
+                        # パラメータが辞書形式の場合
+                        if isinstance(param, dict) and 'name' in param:
+                            param_names.add(param['name'])
+                        # パラメータがオブジェクト形式の場合
+                        elif hasattr(param, 'name') and param.name:
                             param_names.add(param.name)
-        # function_infoからもパラメータ名を収集
+                        # パラメータが文字列形式の場合 ("型 名前")
+                        elif isinstance(param, str):
+                            parts = param.split()
+                            if parts:
+                                param_names.add(parts[-1].replace('*', ''))
+        
+        # function_infoからもパラメータ名を収集（テスト対象関数）
         if hasattr(parsed_data, 'function_info') and parsed_data.function_info:
             if hasattr(parsed_data.function_info, 'parameters'):
                 for param in parsed_data.function_info.parameters:
-                    if hasattr(param, 'name') and param.name:
-                        param_names.add(param.name)
-                    elif isinstance(param, dict) and 'name' in param:
+                    if isinstance(param, dict) and 'name' in param:
                         param_names.add(param['name'])
+                    elif hasattr(param, 'name') and param.name:
+                        param_names.add(param.name)
                     elif isinstance(param, str):
-                        # "型 名前" 形式から名前を抽出
                         parts = param.split()
                         if parts:
                             param_names.add(parts[-1].replace('*', ''))
