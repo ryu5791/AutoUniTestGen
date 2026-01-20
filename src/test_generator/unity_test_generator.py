@@ -523,7 +523,7 @@ class UnityTestGenerator:
     
     def _generate_setup_teardown(self, parsed_data: ParsedData = None) -> str:
         """
-        setUp/tearDown関数を生成 (v5.0.0: static/global変数初期化追加)
+        setUp/tearDown関数を生成 (v5.0.0: static/global変数初期化追加, v5.0.2: 関数分離)
         
         Args:
             parsed_data: 解析済みデータ（v5.0.0で追加）
@@ -532,6 +532,26 @@ class UnityTestGenerator:
             setUp/tearDown関数
         """
         lines = []
+        
+        # v5.0.2: reset_all_global_values関数を生成
+        init_code = []
+        if parsed_data:
+            init_code = self._generate_variable_init_code(parsed_data)
+        
+        lines.append("// ===== グローバル変数リセット関数 =====")
+        lines.append("")
+        lines.append("/**")
+        lines.append(" * 全てのstatic変数・グローバル変数をリセット")
+        lines.append(" */")
+        lines.append("static void reset_all_global_values(void) {")
+        if init_code:
+            for line in init_code:
+                lines.append(f"    {line}")
+        else:
+            lines.append("    // 初期化対象の変数なし")
+        lines.append("}")
+        lines.append("")
+        
         lines.append("// ===== setUp/tearDown =====")
         lines.append("")
         lines.append("/**")
@@ -540,16 +560,9 @@ class UnityTestGenerator:
         lines.append("void setUp(void) {")
         lines.append("    // モックをリセット")
         lines.append("    reset_all_mocks();")
-        
-        # v5.0.0: static変数とグローバル変数の初期化
-        if parsed_data:
-            init_code = self._generate_variable_init_code(parsed_data)
-            if init_code:
-                lines.append("")
-                lines.append("    // static変数・グローバル変数の初期化")
-                for line in init_code:
-                    lines.append(f"    {line}")
-        
+        lines.append("")
+        lines.append("    // グローバル変数をリセット")
+        lines.append("    reset_all_global_values();")
         lines.append("}")
         lines.append("")
         lines.append("/**")
@@ -558,6 +571,8 @@ class UnityTestGenerator:
         lines.append("void tearDown(void) {")
         lines.append("    // クリーンアップ処理")
         lines.append("}")
+        
+        return '\n'.join(lines)
         
         return '\n'.join(lines)
     
@@ -619,7 +634,7 @@ class UnityTestGenerator:
     
     def _generate_single_var_init(self, var, parsed_data: ParsedData) -> str:
         """
-        単一変数の初期化コードを生成 (v5.0.0)
+        単一変数の初期化コードを生成 (v5.0.0, v5.0.2: extern変数も初期化)
         
         Args:
             var: VariableDeclInfo
@@ -631,9 +646,8 @@ class UnityTestGenerator:
         var_name = var.name
         var_type = var.var_type
         
-        # extern変数は初期化しない
-        if var.is_extern:
-            return None
+        # v5.0.2: extern変数も初期化対象に含める（コメントで明示）
+        # extern変数は他のモジュールで定義されているが、テスト時はリセットする
         
         # 配列の場合
         if var.is_array:

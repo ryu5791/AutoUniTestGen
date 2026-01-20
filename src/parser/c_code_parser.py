@@ -532,10 +532,12 @@ class CCodeParser:
                         initial_value=initial_value
                     )
                     
-                    # グローバルスコープの変数のみ収集
+                    # グローバルスコープの変数を収集
+                    # v5.0.2: extern変数も含める（テスト時にリセットするため）
                     if is_static:
                         self.static_variables.append(var_info)
-                    elif not is_extern:
+                    else:
+                        # extern変数も含めてglobal_variablesに追加
                         self.global_variables.append(var_info)
                 
                 self.generic_visit(node)
