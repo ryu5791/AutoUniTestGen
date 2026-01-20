@@ -127,6 +127,11 @@ class UnityTestGenerator:
             modified_source, parsed_data.function_name
         )
         
+        # v4.8.7: main関数と対象外関数を除外
+        modified_source = self._remove_non_target_functions(
+            modified_source, parsed_data.function_name
+        )
+        
         # 元のソースコードをベースにする
         parts = [modified_source]
         
@@ -267,6 +272,98 @@ class UnityTestGenerator:
         modified = re.sub(proto_pattern, add_static_to_proto, modified, flags=re.MULTILINE)
         
         return modified
+    
+    def _remove_non_target_functions(self, source_code: str, target_function_name: str) -> str:
+        """
+        main関数およびテスト対象以外の関数定義を除外（v4.8.7）
+        
+        テスト対象関数、型定義、マクロ、グローバル変数は保持し、
+        それ以外の関数定義（特にmain関数）を除去する
+        
+        Args:
+            source_code: 元のソースコード
+            target_function_name: テスト対象関数名
+        
+        Returns:
+            対象外関数を除外したソースコード
+        """
+        import re
+        
+        if not target_function_name:
+            return source_code
+        
+        # 関数定義を検出するパターン
+        # 戻り値型 関数名(パラメータ) { ... }
+        # 注意: 波括弧のネストを正しく処理する必要がある
+        
+        lines = source_code.split('\n')
+        result_lines = []
+        
+        in_function = False
+        current_function_name = None
+        brace_count = 0
+        function_start_line = 0
+        
+        # 関数定義の開始を検出するパターン
+        # static, extern, inline などの修飾子にも対応
+        func_start_pattern = re.compile(
+            r'^(\s*)(static\s+|extern\s+|inline\s+)*((?:const\s+)?(?:unsigned\s+|signed\s+)?(?:volatile\s+)?(?:\w+)(?:\s*\*)*)\s+(\w+)\s*\([^)]*\)\s*{'
+        )
+        # プロトタイプ宣言（関数定義ではない）を検出
+        proto_pattern = re.compile(
+            r'^(\s*)(static\s+|extern\s+|inline\s+)*((?:const\s+)?(?:unsigned\s+|signed\s+)?(?:volatile\s+)?(?:\w+)(?:\s*\*)*)\s+(\w+)\s*\([^)]*\)\s*;'
+        )
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            if not in_function:
+                # 関数定義の開始を検出
+                match = func_start_pattern.match(line)
+                if match:
+                    current_function_name = match.group(4)
+                    
+                    # テスト対象関数の場合は保持
+                    if current_function_name == target_function_name:
+                        result_lines.append(line)
+                        if '{' in line:
+                            brace_count = line.count('{') - line.count('}')
+                            if brace_count > 0:
+                                in_function = True
+                        i += 1
+                        continue
+                    
+                    # main関数またはその他の関数は除外
+                    self.logger.info(f"v4.8.7: 対象外関数 '{current_function_name}' を除外")
+                    
+                    # 関数の終わりまでスキップ
+                    brace_count = line.count('{') - line.count('}')
+                    if brace_count == 0:
+                        # 同じ行で関数が完結している場合（インライン関数など）
+                        i += 1
+                        continue
+                    
+                    # 関数の終わりを探す
+                    i += 1
+                    while i < len(lines) and brace_count > 0:
+                        brace_count += lines[i].count('{') - lines[i].count('}')
+                        i += 1
+                    continue
+                else:
+                    # 関数定義以外の行は保持
+                    result_lines.append(line)
+            else:
+                # 関数内の処理
+                result_lines.append(line)
+                brace_count += line.count('{') - line.count('}')
+                if brace_count == 0:
+                    in_function = False
+                    current_function_name = None
+            
+            i += 1
+        
+        return '\n'.join(result_lines)
     
     def _generate_header(self, parsed_data: ParsedData) -> str:
         """
