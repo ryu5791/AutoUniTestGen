@@ -1422,7 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算 (v5.1.2: Phase 2 - 関数最終return対応)
+        戻り値の期待値を計算 (v5.1.3: ローカル変数チェック追加)
         
         Args:
             test_case: テストケース
@@ -1451,17 +1451,23 @@ class TestFunctionGenerator:
             if decision:
                 # 条件が真の場合のreturn値
                 if matching_condition.return_value_if_true:
-                    return matching_condition.return_value_if_true
+                    ret_val = matching_condition.return_value_if_true
+                    # v5.1.3: ローカル変数名かどうかをチェック
+                    if not self._is_local_variable(ret_val, parsed_data):
+                        return ret_val
             else:
                 # 条件が偽の場合のreturn値
                 if matching_condition.return_value_if_false:
-                    return matching_condition.return_value_if_false
+                    ret_val = matching_condition.return_value_if_false
+                    if not self._is_local_variable(ret_val, parsed_data):
+                        return ret_val
                 # v5.1.2: 偽でelse節がない場合、関数の最終return値を使用
-                # ただし、最初の条件のみ（後続の条件に進む可能性があるため）
-                # この条件が関数の最初の条件かどうかをチェック
                 if self._is_first_condition_false_path(matching_condition, parsed_data, test_case):
                     if parsed_data.function_final_return:
-                        return parsed_data.function_final_return
+                        ret_val = parsed_data.function_final_return
+                        # v5.1.3: ローカル変数名の場合はフォールバック
+                        if not self._is_local_variable(ret_val, parsed_data):
+                            return ret_val
         
         # v5.0.3: 複合条件の決定結果を計算（フォールバック）
         decision = self._evaluate_decision(test_case, parsed_data)
@@ -1470,6 +1476,56 @@ class TestFunctionGenerator:
             return "1"
         else:
             return "0"
+    
+    def _is_local_variable(self, value: str, parsed_data: ParsedData) -> bool:
+        """
+        値がローカル変数名かどうかをチェック (v5.1.3)
+        
+        Args:
+            value: チェックする値
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            ローカル変数名の場合True
+        """
+        if not value:
+            return False
+        
+        # 数値リテラルかどうかをチェック
+        try:
+            # 整数または浮動小数点数として解析可能ならローカル変数ではない
+            float(value)
+            return False
+        except ValueError:
+            pass
+        
+        # 負の数のチェック
+        if value.startswith('-'):
+            try:
+                float(value[1:])
+                return False
+            except ValueError:
+                pass
+        
+        # 16進数のチェック
+        if value.startswith('0x') or value.startswith('0X'):
+            try:
+                int(value, 16)
+                return False
+            except ValueError:
+                pass
+        
+        # ローカル変数リストにあるかチェック
+        if parsed_data.local_variables:
+            if value in parsed_data.local_variables:
+                return True
+        
+        # 識別子パターン（英字またはアンダースコアで始まる）の場合は
+        # ローカル変数として扱う
+        if value and (value[0].isalpha() or value[0] == '_'):
+            return True
+        
+        return False
     
     def _is_first_condition_false_path(self, condition, parsed_data: ParsedData, 
                                         test_case: TestCase) -> bool:
