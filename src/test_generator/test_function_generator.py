@@ -1422,7 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算 (v5.1.3: ローカル変数チェック追加)
+        戻り値の期待値を計算 (v5.1.4 Phase 3: 中間条件の経路追跡)
         
         Args:
             test_case: テストケース
@@ -1439,9 +1439,11 @@ class TestFunctionGenerator:
         
         # v5.1.1: 条件オブジェクトから直接return値を取得
         matching_condition = None
-        for cond in parsed_data.conditions:
+        condition_idx = -1
+        for i, cond in enumerate(parsed_data.conditions):
             if test_case.condition in cond.expression or cond.expression in test_case.condition:
                 matching_condition = cond
+                condition_idx = i
                 break
         
         if matching_condition:
@@ -1461,13 +1463,13 @@ class TestFunctionGenerator:
                     ret_val = matching_condition.return_value_if_false
                     if not self._is_local_variable(ret_val, parsed_data):
                         return ret_val
-                # v5.1.2: 偽でelse節がない場合、関数の最終return値を使用
-                if self._is_first_condition_false_path(matching_condition, parsed_data, test_case):
-                    if parsed_data.function_final_return:
-                        ret_val = parsed_data.function_final_return
-                        # v5.1.3: ローカル変数名の場合はフォールバック
-                        if not self._is_local_variable(ret_val, parsed_data):
-                            return ret_val
+                
+                # v5.1.4 Phase 3: 次の条件のreturn値を探す
+                next_return = self._find_next_return_after_condition(
+                    condition_idx, matching_condition, parsed_data
+                )
+                if next_return and not self._is_local_variable(next_return, parsed_data):
+                    return next_return
         
         # v5.0.3: 複合条件の決定結果を計算（フォールバック）
         decision = self._evaluate_decision(test_case, parsed_data)
@@ -1476,6 +1478,37 @@ class TestFunctionGenerator:
             return "1"
         else:
             return "0"
+    
+    def _find_next_return_after_condition(self, condition_idx: int, 
+                                           condition, 
+                                           parsed_data: ParsedData) -> Optional[str]:
+        """
+        条件が偽の場合に到達する次のreturn文を探す (v5.1.4 Phase 3)
+        
+        条件が偽の場合、次の条件に進む。次の条件も偽なら、さらに次へ...
+        最終的に全ての条件が偽の場合、関数末尾のreturn文に到達する。
+        
+        Args:
+            condition_idx: 条件のインデックス
+            condition: 現在の条件
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            次のreturn値、またはNone
+        """
+        if not parsed_data.all_return_statements:
+            return None
+        
+        # 最後の条件の場合のみ、最終return文を返す
+        # （中間の条件が偽の場合は、次の条件の結果に依存するため確定できない）
+        if condition_idx == len(parsed_data.conditions) - 1:
+            # 最後の条件が偽の場合、関数末尾のreturn文に到達
+            if parsed_data.function_final_return:
+                return parsed_data.function_final_return
+        
+        # 中間の条件が偽の場合は、次の条件の結果に依存するため
+        # ここではNoneを返す（フォールバック使用）
+        return None
     
     def _is_local_variable(self, value: str, parsed_data: ParsedData) -> bool:
         """

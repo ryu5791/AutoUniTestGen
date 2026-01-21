@@ -35,6 +35,7 @@ class ConditionExtractor(c_ast.NodeVisitor):
         self.source_lines: List[str] = []  # v3.1: 元のソースコードの行を保持
         self.line_offset: int = 0  # v3.1: 行番号オフセット
         self.function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値
+        self.all_return_statements: List[Tuple[int, str]] = []  # v5.1.4: 全return文
     
     def set_source_lines(self, source_lines: List[str]) -> None:
         """
@@ -88,12 +89,47 @@ class ConditionExtractor(c_ast.NodeVisitor):
             self.function_final_return = self._extract_function_final_return(node)
             self.logger.debug(f"関数の最終return: {self.function_final_return}")
             
+            # v5.1.4 Phase 3: 関数内の全return文を抽出
+            self.all_return_statements = self._extract_all_return_statements(node)
+            self.logger.debug(f"関数内の全return文: {len(self.all_return_statements)}個")
+            
             self.generic_visit(node)
             self.in_target_function = False
             self.logger.debug(f"対象関数を出る: {func_name}")
         else:
             # 対象関数でない場合はスキップ
             pass
+    
+    def _extract_all_return_statements(self, func_node: c_ast.FuncDef) -> List[Tuple[int, str]]:
+        """
+        関数内の全return文を抽出 (v5.1.4 Phase 3)
+        
+        Args:
+            func_node: 関数定義のASTノード
+        
+        Returns:
+            (行番号, return値)のタプルのリスト
+        """
+        return_statements = []
+        
+        def visit_node(node):
+            if isinstance(node, c_ast.Return):
+                line = getattr(node, 'coord', None)
+                line_no = line.line - self.line_offset if line else 0
+                if node.expr:
+                    value = self._node_to_str(node.expr)
+                else:
+                    value = "void"
+                return_statements.append((line_no, value))
+            
+            # 子ノードを再帰的に訪問
+            for child_name, child in node.children():
+                visit_node(child)
+        
+        if func_node.body:
+            visit_node(func_node.body)
+        
+        return return_statements
     
     def _extract_function_final_return(self, func_node: c_ast.FuncDef) -> Optional[str]:
         """

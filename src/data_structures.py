@@ -5,7 +5,7 @@ C言語単体テスト自動生成ツールで使用するデータクラスを�
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from enum import Enum
 
 
@@ -471,6 +471,7 @@ class ParsedData:
     static_variables: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: static変数詳細情報
     global_variable_infos: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: グローバル変数詳細情報
     function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値（デフォルトreturn）
+    all_return_statements: List[Tuple[int, str]] = field(default_factory=list)  # v5.1.4: 全return文 (行番号, 値)
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """
