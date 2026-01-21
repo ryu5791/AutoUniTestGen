@@ -1422,7 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算 (v5.0.3: 複合条件対応)
+        戻り値の期待値を計算 (v5.1.1: return文解析対応)
         
         Args:
             test_case: テストケース
@@ -1437,7 +1437,27 @@ class TestFunctionGenerator:
             if 'result' in test_case.output_values:
                 return str(test_case.output_values['result'])
         
-        # v5.0.3: 複合条件の決定結果を計算
+        # v5.1.1: 条件オブジェクトから直接return値を取得
+        matching_condition = None
+        for cond in parsed_data.conditions:
+            if test_case.condition in cond.expression or cond.expression in test_case.condition:
+                matching_condition = cond
+                break
+        
+        if matching_condition:
+            # 複合条件の決定結果を計算
+            decision = self._evaluate_decision(test_case, parsed_data)
+            
+            if decision:
+                # 条件が真の場合のreturn値
+                if matching_condition.return_value_if_true:
+                    return matching_condition.return_value_if_true
+            else:
+                # 条件が偽の場合のreturn値
+                if matching_condition.return_value_if_false:
+                    return matching_condition.return_value_if_false
+        
+        # v5.0.3: 複合条件の決定結果を計算（フォールバック）
         decision = self._evaluate_decision(test_case, parsed_data)
         
         if decision:

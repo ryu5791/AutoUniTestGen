@@ -30,12 +30,17 @@ class Condition:
     cases: Optional[List[Any]] = None
     ast_node: Any = None
     parent_context: str = ""
+    # v5.1.1: return文の値を追加
+    return_value_if_true: Optional[str] = None   # 条件が真の場合のreturn値
+    return_value_if_false: Optional[str] = None  # 条件が偽の場合のreturn値
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             'line': self.line,
             'type': self.type.value,
-            'expression': self.expression
+            'expression': self.expression,
+            'return_value_if_true': self.return_value_if_true,
+            'return_value_if_false': self.return_value_if_false
         }
 
 

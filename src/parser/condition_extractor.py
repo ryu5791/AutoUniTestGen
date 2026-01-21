@@ -114,6 +114,10 @@ class ConditionExtractor(c_ast.NodeVisitor):
         # v4.8.4: 条件式テキストから直接解析（ASTノードの行番号ずれ問題を回避）
         condition_info = self._analyze_condition_text(condition_str)
         
+        # v5.1.1: if文のtrue/false分岐のreturn値を抽出
+        return_value_if_true = self._extract_return_value(node.iftrue)
+        return_value_if_false = self._extract_return_value(node.iffalse) if node.iffalse else None
+        
         # Conditionオブジェクトを作成
         condition = Condition(
             line=original_line_no,  # v3.1: 元のソースの行番号を使用
@@ -124,11 +128,13 @@ class ConditionExtractor(c_ast.NodeVisitor):
             right=condition_info.get('right'),
             conditions=condition_info.get('conditions'),  # 3つ以上の条件リスト
             ast_node=node,
-            parent_context=self.parent_context
+            parent_context=self.parent_context,
+            return_value_if_true=return_value_if_true,    # v5.1.1
+            return_value_if_false=return_value_if_false   # v5.1.1
         )
         
         self.conditions.append(condition)
-        self.logger.debug(f"if文を検出 (元行{original_line_no}): {condition_str}")
+        self.logger.debug(f"if文を検出 (元行{original_line_no}): {condition_str}, return_true={return_value_if_true}, return_false={return_value_if_false}")
         
         # 子ノードを訪問
         self.generic_visit(node)
@@ -396,6 +402,52 @@ class ConditionExtractor(c_ast.NodeVisitor):
         
         traverse(node)
         return conditions
+    
+    def _extract_return_value(self, block_node) -> Optional[str]:
+        """
+        ブロックからreturn値を抽出 (v5.1.1)
+        
+        if文のtrue/false分岐内のreturn文を探して、その値を返す
+        
+        Args:
+            block_node: if文のiftrue または iffalse ブロック
+        
+        Returns:
+            return値の文字列、またはNone（return文がない場合）
+        """
+        if block_node is None:
+            return None
+        
+        # Return文を直接チェック
+        if isinstance(block_node, c_ast.Return):
+            if block_node.expr:
+                return self._node_to_str(block_node.expr)
+            else:
+                return "void"  # return; の場合
+        
+        # Compound（ブロック）の場合、最初のreturn文を探す
+        if isinstance(block_node, c_ast.Compound):
+            if block_node.block_items:
+                for item in block_node.block_items:
+                    # 直接return文の場合
+                    if isinstance(item, c_ast.Return):
+                        if item.expr:
+                            return self._node_to_str(item.expr)
+                        else:
+                            return "void"
+                    # ネストしたif文の場合は再帰的に探索しない
+                    # （最初の直接return文のみを対象とする）
+        
+        # それ以外のノードの場合
+        # 子ノードに直接Returnがあるか確認
+        for child_name, child in block_node.children():
+            if isinstance(child, c_ast.Return):
+                if child.expr:
+                    return self._node_to_str(child.expr)
+                else:
+                    return "void"
+        
+        return None
     
     def _extract_switch_cases(self, switch_node: c_ast.Switch) -> List:
         """
