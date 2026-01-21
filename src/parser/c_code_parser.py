@@ -201,6 +201,9 @@ class CCodeParser:
             static_variables, global_variable_infos = self._extract_variable_details(ast, code)
             self.logger.info(f"{len(static_variables)}個のstatic変数、{len(global_variable_infos)}個のグローバル変数詳細を抽出しました")
             
+            # 11.12. v5.1.2: 関数の最終return値を取得
+            function_final_return = getattr(extractor, 'function_final_return', None)
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -221,7 +224,8 @@ class CCodeParser:
                 local_variables=local_variables,  # v4.2.0: 追加
                 function_pointer_tables=function_pointer_tables,  # v4.7: 追加
                 static_variables=static_variables,  # v5.0.0: 追加
-                global_variable_infos=global_variable_infos  # v5.0.0: 追加
+                global_variable_infos=global_variable_infos,  # v5.0.0: 追加
+                function_final_return=function_final_return  # v5.1.2: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")

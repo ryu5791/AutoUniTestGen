@@ -34,6 +34,7 @@ class ConditionExtractor(c_ast.NodeVisitor):
         self.parent_context = ""
         self.source_lines: List[str] = []  # v3.1: 元のソースコードの行を保持
         self.line_offset: int = 0  # v3.1: 行番号オフセット
+        self.function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値
     
     def set_source_lines(self, source_lines: List[str]) -> None:
         """
@@ -82,12 +83,49 @@ class ConditionExtractor(c_ast.NodeVisitor):
         if self.target_function is None or func_name == self.target_function:
             self.in_target_function = True
             self.logger.debug(f"対象関数に入る: {func_name}")
+            
+            # v5.1.2: 関数の最終return文を抽出
+            self.function_final_return = self._extract_function_final_return(node)
+            self.logger.debug(f"関数の最終return: {self.function_final_return}")
+            
             self.generic_visit(node)
             self.in_target_function = False
             self.logger.debug(f"対象関数を出る: {func_name}")
         else:
             # 対象関数でない場合はスキップ
             pass
+    
+    def _extract_function_final_return(self, func_node: c_ast.FuncDef) -> Optional[str]:
+        """
+        関数の最終return文（デフォルトreturn）を抽出 (v5.1.2)
+        
+        関数本体の末尾にあるreturn文を探す
+        これは条件分岐を通過した後の「フォールスルー」return値
+        
+        Args:
+            func_node: 関数定義のASTノード
+        
+        Returns:
+            最終return値の文字列、またはNone
+        """
+        if not func_node.body or not isinstance(func_node.body, c_ast.Compound):
+            return None
+        
+        if not func_node.body.block_items:
+            return None
+        
+        # 関数本体の末尾から探索
+        block_items = func_node.body.block_items
+        
+        # 末尾の文がreturn文かチェック
+        last_item = block_items[-1]
+        if isinstance(last_item, c_ast.Return):
+            if last_item.expr:
+                return self._node_to_str(last_item.expr)
+            else:
+                return "void"
+        
+        return None
     
     def visit_If(self, node: c_ast.If) -> None:
         """if文を訪問"""

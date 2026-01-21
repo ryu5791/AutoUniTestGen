@@ -470,6 +470,7 @@ class ParsedData:
     function_pointer_tables: List['FunctionPointerTable'] = field(default_factory=list)  # v4.7: 関数ポインタテーブル
     static_variables: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: static変数詳細情報
     global_variable_infos: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: グローバル変数詳細情報
+    function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値（デフォルトreturn）
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """

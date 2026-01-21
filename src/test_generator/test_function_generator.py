@@ -1422,7 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算 (v5.1.1: return文解析対応)
+        戻り値の期待値を計算 (v5.1.2: Phase 2 - 関数最終return対応)
         
         Args:
             test_case: テストケース
@@ -1456,6 +1456,12 @@ class TestFunctionGenerator:
                 # 条件が偽の場合のreturn値
                 if matching_condition.return_value_if_false:
                     return matching_condition.return_value_if_false
+                # v5.1.2: 偽でelse節がない場合、関数の最終return値を使用
+                # ただし、最初の条件のみ（後続の条件に進む可能性があるため）
+                # この条件が関数の最初の条件かどうかをチェック
+                if self._is_first_condition_false_path(matching_condition, parsed_data, test_case):
+                    if parsed_data.function_final_return:
+                        return parsed_data.function_final_return
         
         # v5.0.3: 複合条件の決定結果を計算（フォールバック）
         decision = self._evaluate_decision(test_case, parsed_data)
@@ -1464,6 +1470,43 @@ class TestFunctionGenerator:
             return "1"
         else:
             return "0"
+    
+    def _is_first_condition_false_path(self, condition, parsed_data: ParsedData, 
+                                        test_case: TestCase) -> bool:
+        """
+        条件が偽の場合に最終returnに到達するか判定 (v5.1.2)
+        
+        現在の条件が偽の場合、後続の全ての条件も偽であれば
+        関数の最終return文に到達する
+        
+        Args:
+            condition: 現在の条件
+            parsed_data: 解析済みデータ
+            test_case: テストケース
+        
+        Returns:
+            最終returnに到達する可能性がある場合True
+        """
+        # 単純化: テスト対象の条件が最後の条件の場合のみTrue
+        # または、テスト対象の条件のみがFalseで他の条件がない場合
+        
+        # 条件のインデックスを取得
+        condition_idx = -1
+        for i, cond in enumerate(parsed_data.conditions):
+            if cond.expression == condition.expression:
+                condition_idx = i
+                break
+        
+        if condition_idx == -1:
+            return False
+        
+        # 最後の条件の場合
+        if condition_idx == len(parsed_data.conditions) - 1:
+            return True
+        
+        # それ以外の場合は、現時点では保守的にFalseを返す
+        # （Phase 3以降で改善）
+        return False
     
     def _evaluate_decision(self, test_case: TestCase, parsed_data: ParsedData) -> bool:
         """
@@ -1512,10 +1555,13 @@ class TestFunctionGenerator:
     
     def _evaluate_complex_condition(self, condition_expr: str, truth: str) -> bool:
         """
-        複合条件式を評価 (v5.0.3)
+        複合条件式を評価 (v5.1.2: 右側AND条件の評価を修正)
         
         例: ((age >= 18) && has_license) || is_admin
         パターン TFT → (T && F) || T = F || T = T
+        
+        例: (risk >= 2) || ((temp > 40) && (humidity > 70))
+        パターン FTF → F || (T && F) = F || F = F
         
         Args:
             condition_expr: 条件式
@@ -1526,9 +1572,6 @@ class TestFunctionGenerator:
         """
         # 条件式のパターンを解析
         # 括弧の深さとAND/ORの位置を追跡
-        
-        # 簡易実装: 最も外側のORで分割し、各部分を評価
-        # (A && B) || C の形式を想定
         
         # まず括弧を考慮してトップレベルのORを探す
         depth = 0
@@ -1545,21 +1588,28 @@ class TestFunctionGenerator:
                     break
         
         if top_level_or_pos != -1:
-            # (A && B) || C の形式
+            # (A && B) || C or A || (B && C) の形式
             left_part = condition_expr[:top_level_or_pos].strip()
             right_part = condition_expr[top_level_or_pos+2:].strip()
             
-            # 左側のAND条件の数を数える
+            # 左側の条件数を数える（&&の数 + 1）
             left_and_count = left_part.count('&&') + 1
             
             if len(truth) >= left_and_count + 1:
-                # 左側のAND部分の評価
+                # 左側の評価
                 left_truth = truth[:left_and_count]
-                left_result = 'F' not in left_truth  # AND: 全てTならTrue
+                if '&&' in left_part:
+                    left_result = 'F' not in left_truth  # AND: 全てTならTrue
+                else:
+                    left_result = left_truth == 'T' or 'T' in left_truth
                 
                 # 右側の評価
                 right_truth = truth[left_and_count:]
-                right_result = 'T' in right_truth if right_truth else False
+                if '&&' in right_part:
+                    # v5.1.2: 右側がAND条件の場合、全てTならTrue
+                    right_result = 'F' not in right_truth if right_truth else False
+                else:
+                    right_result = 'T' in right_truth if right_truth else False
                 
                 # OR結合
                 return left_result or right_result
