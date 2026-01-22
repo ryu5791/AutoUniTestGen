@@ -1792,16 +1792,20 @@ class TestFunctionGenerator:
             呼び出し回数チェックコード
         """
         lines = []
-        lines.append("    // 呼び出し回数を確認")
+        
+        # v5.1.4: モック呼び出し回数のチェックは正確に生成できないため
+        # コメントとして出力し、ユーザーが必要に応じて修正できるようにする
+        lines.append("    // モック呼び出し回数の確認（必要に応じて期待値を調整してください）")
         
         for func_name in parsed_data.external_functions:
             # 条件式に含まれているか確認
             if func_name in test_case.condition:
                 expected_count = 1
+                lines.append(f"    // TEST_ASSERT_EQUAL({expected_count}, mock_{func_name}_call_count);")
             else:
-                expected_count = 0
-            
-            lines.append(f"    TEST_ASSERT_EQUAL({expected_count}, mock_{func_name}_call_count);")
+                # 条件式に含まれていない場合、呼び出し回数は不明
+                # （条件が偽の場合、後続のコードで呼ばれる可能性がある）
+                lines.append(f"    // TEST_ASSERT_EQUAL(/* 要確認 */, mock_{func_name}_call_count);")
         
         lines.append("")
         return '\n'.join(lines)
