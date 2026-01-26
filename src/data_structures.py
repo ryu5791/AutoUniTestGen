@@ -472,6 +472,7 @@ class ParsedData:
     global_variable_infos: List['VariableDeclInfo'] = field(default_factory=list)  # v5.0.0: グローバル変数詳細情報
     function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値（デフォルトreturn）
     all_return_statements: List[Tuple[int, str]] = field(default_factory=list)  # v5.1.4: 全return文 (行番号, 値)
+    local_var_assignments: Dict[str, str] = field(default_factory=dict)  # v5.1.6: ローカル変数の代入元関数 {変数名: 関数名}
     
     def get_struct_definition(self, type_name: str) -> Optional[StructDefinition]:
         """

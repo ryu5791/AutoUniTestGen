@@ -207,6 +207,9 @@ class CCodeParser:
             # 11.13. v5.1.4 Phase 3: 全return文を取得
             all_return_statements = getattr(extractor, 'all_return_statements', [])
             
+            # 11.14. v5.1.6 Phase 4: ローカル変数の代入元関数を取得
+            local_var_assignments = getattr(extractor, 'local_var_assignments', {})
+            
             # 12. ParsedDataを構築
             parsed_data = ParsedData(
                 file_name=os.path.basename(c_file_path),
@@ -229,7 +232,8 @@ class CCodeParser:
                 static_variables=static_variables,  # v5.0.0: 追加
                 global_variable_infos=global_variable_infos,  # v5.0.0: 追加
                 function_final_return=function_final_return,  # v5.1.2: 追加
-                all_return_statements=all_return_statements  # v5.1.4: 追加
+                all_return_statements=all_return_statements,  # v5.1.4: 追加
+                local_var_assignments=local_var_assignments  # v5.1.6: 追加
             )
             
             self.logger.info(f"解析完了: {len(conditions)}個の条件分岐を検出")

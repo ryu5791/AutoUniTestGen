@@ -6,7 +6,7 @@ ASTから条件分岐を抽出
 
 import sys
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from pycparser import c_ast
 
 # パスを追加
@@ -36,6 +36,7 @@ class ConditionExtractor(c_ast.NodeVisitor):
         self.line_offset: int = 0  # v3.1: 行番号オフセット
         self.function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値
         self.all_return_statements: List[Tuple[int, str]] = []  # v5.1.4: 全return文
+        self.local_var_assignments: Dict[str, str] = {}  # v5.1.6: ローカル変数の代入元関数
     
     def set_source_lines(self, source_lines: List[str]) -> None:
         """
@@ -93,12 +94,60 @@ class ConditionExtractor(c_ast.NodeVisitor):
             self.all_return_statements = self._extract_all_return_statements(node)
             self.logger.debug(f"関数内の全return文: {len(self.all_return_statements)}個")
             
+            # v5.1.6 Phase 4: ローカル変数への関数呼び出し代入を抽出
+            self.local_var_assignments = self._extract_local_var_assignments(node)
+            self.logger.debug(f"ローカル変数代入: {self.local_var_assignments}")
+            
             self.generic_visit(node)
             self.in_target_function = False
             self.logger.debug(f"対象関数を出る: {func_name}")
         else:
             # 対象関数でない場合はスキップ
             pass
+    
+    def _extract_local_var_assignments(self, func_node: c_ast.FuncDef) -> Dict[str, str]:
+        """
+        ローカル変数への関数呼び出し代入を抽出 (v5.1.6 Phase 4)
+        
+        例: int risk = evaluate_heat_risk(temp, humidity);
+        → {'risk': 'evaluate_heat_risk'}
+        
+        Args:
+            func_node: 関数定義のASTノード
+        
+        Returns:
+            {変数名: 関数名} の辞書
+        """
+        assignments = {}
+        
+        def visit_node(node):
+            # 変数宣言時の初期化をチェック
+            if isinstance(node, c_ast.Decl):
+                if node.init and isinstance(node.init, c_ast.FuncCall):
+                    var_name = node.name
+                    if node.init.name and hasattr(node.init.name, 'name'):
+                        func_name = node.init.name.name
+                        assignments[var_name] = func_name
+                        self.logger.debug(f"代入検出: {var_name} = {func_name}(...)")
+            
+            # 代入文をチェック
+            if isinstance(node, c_ast.Assignment):
+                if isinstance(node.rvalue, c_ast.FuncCall):
+                    if isinstance(node.lvalue, c_ast.ID):
+                        var_name = node.lvalue.name
+                        if node.rvalue.name and hasattr(node.rvalue.name, 'name'):
+                            func_name = node.rvalue.name.name
+                            assignments[var_name] = func_name
+                            self.logger.debug(f"代入検出: {var_name} = {func_name}(...)")
+            
+            # 子ノードを再帰的に訪問
+            for child_name, child in node.children():
+                visit_node(child)
+        
+        if func_node.body:
+            visit_node(func_node.body)
+        
+        return assignments
     
     def _extract_all_return_statements(self, func_node: c_ast.FuncDef) -> List[Tuple[int, str]]:
         """

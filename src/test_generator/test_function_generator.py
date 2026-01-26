@@ -1422,7 +1422,7 @@ class TestFunctionGenerator:
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
         """
-        戻り値の期待値を計算 (v5.1.4 Phase 3: 中間条件の経路追跡)
+        戻り値の期待値を計算 (v5.1.6 Phase 4: モック戻り値連動)
         
         Args:
             test_case: テストケース
@@ -1454,22 +1454,32 @@ class TestFunctionGenerator:
                 # 条件が真の場合のreturn値
                 if matching_condition.return_value_if_true:
                     ret_val = matching_condition.return_value_if_true
-                    # v5.1.3: ローカル変数名かどうかをチェック
-                    if not self._is_local_variable(ret_val, parsed_data):
+                    # v5.1.6: ローカル変数の場合、モック戻り値に変換を試みる
+                    mock_val = self._resolve_local_variable_to_mock(ret_val, parsed_data)
+                    if mock_val:
+                        return mock_val
+                    elif not self._is_local_variable(ret_val, parsed_data):
                         return ret_val
             else:
                 # 条件が偽の場合のreturn値
                 if matching_condition.return_value_if_false:
                     ret_val = matching_condition.return_value_if_false
-                    if not self._is_local_variable(ret_val, parsed_data):
+                    mock_val = self._resolve_local_variable_to_mock(ret_val, parsed_data)
+                    if mock_val:
+                        return mock_val
+                    elif not self._is_local_variable(ret_val, parsed_data):
                         return ret_val
                 
                 # v5.1.4 Phase 3: 次の条件のreturn値を探す
                 next_return = self._find_next_return_after_condition(
                     condition_idx, matching_condition, parsed_data
                 )
-                if next_return and not self._is_local_variable(next_return, parsed_data):
-                    return next_return
+                if next_return:
+                    mock_val = self._resolve_local_variable_to_mock(next_return, parsed_data)
+                    if mock_val:
+                        return mock_val
+                    elif not self._is_local_variable(next_return, parsed_data):
+                        return next_return
         
         # v5.0.3: 複合条件の決定結果を計算（フォールバック）
         decision = self._evaluate_decision(test_case, parsed_data)
@@ -1478,6 +1488,33 @@ class TestFunctionGenerator:
             return "1"
         else:
             return "0"
+    
+    def _resolve_local_variable_to_mock(self, var_name: str, 
+                                         parsed_data: ParsedData) -> Optional[str]:
+        """
+        ローカル変数をモック戻り値に解決する (v5.1.6 Phase 4)
+        
+        例: 'risk' → 'mock_evaluate_heat_risk_return_value'
+        
+        Args:
+            var_name: ローカル変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            モック戻り値変数名、または None
+        """
+        if not var_name:
+            return None
+        
+        # local_var_assignmentsから代入元関数を取得
+        if hasattr(parsed_data, 'local_var_assignments') and parsed_data.local_var_assignments:
+            if var_name in parsed_data.local_var_assignments:
+                func_name = parsed_data.local_var_assignments[var_name]
+                # 外部関数（モック対象）かどうかをチェック
+                if func_name in parsed_data.external_functions:
+                    return f"mock_{func_name}_return_value"
+        
+        return None
     
     def _find_next_return_after_condition(self, condition_idx: int, 
                                            condition, 
