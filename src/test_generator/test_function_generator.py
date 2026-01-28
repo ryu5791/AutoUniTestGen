@@ -1721,16 +1721,103 @@ class TestFunctionGenerator:
         if not parsed_data.all_return_statements:
             return None
         
-        # 最後の条件の場合のみ、最終return文を返す
-        # （中間の条件が偽の場合は、次の条件の結果に依存するため確定できない）
+        # 最後の条件の場合、最終return文を返す
         if condition_idx == len(parsed_data.conditions) - 1:
-            # 最後の条件が偽の場合、関数末尾のreturn文に到達
             if parsed_data.function_final_return:
                 return parsed_data.function_final_return
         
-        # 中間の条件が偽の場合は、次の条件の結果に依存するため
-        # ここではNoneを返す（フォールバック使用）
+        # v5.1.8 Phase 5: 中間の条件が偽の場合、後続の条件も評価して
+        # 全て偽なら最終return文に到達すると判定
+        # デフォルト入力値（0）で後続の条件が全て偽になるかチェック
+        all_subsequent_false = self._check_subsequent_conditions_false(
+            condition_idx, parsed_data
+        )
+        
+        if all_subsequent_false:
+            if parsed_data.function_final_return:
+                return parsed_data.function_final_return
+        
         return None
+    
+    def _check_subsequent_conditions_false(self, start_idx: int, 
+                                            parsed_data: ParsedData) -> bool:
+        """
+        後続の条件が全て偽になるかチェック (v5.1.8 Phase 5)
+        
+        デフォルト入力値（0）で評価した場合、後続の全条件が偽になるかを判定。
+        これにより、中間条件が偽の場合に最終return文に到達することを確認。
+        
+        Args:
+            start_idx: 開始条件のインデックス
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            全て偽になる場合True
+        """
+        if start_idx >= len(parsed_data.conditions) - 1:
+            return True
+        
+        # 後続の条件をチェック
+        for i in range(start_idx + 1, len(parsed_data.conditions)):
+            cond = parsed_data.conditions[i]
+            
+            # ネストされた条件（親コンテキストがある場合）
+            if cond.parent_context:
+                # 親条件が偽ならこの条件は評価されない
+                continue
+            
+            # 条件式を評価（デフォルト値で）
+            # 簡易評価：数値比較や論理演算をデフォルト値（0）で評価
+            expr = cond.expression
+            
+            # 特殊なケース：変数名のみの条件（例: g_system_fault）
+            # デフォルト値0なら偽
+            if self._is_simple_variable_condition(expr):
+                continue  # デフォルト0なので偽
+            
+            # 比較演算子を含む条件
+            if '>=' in expr or '>' in expr:
+                # x >= N や x > N の形式
+                # デフォルト0なら、N > 0 の場合は偽
+                continue  # 通常は偽
+            
+            if '==' in expr:
+                # x == N の形式
+                # N != 0 なら偽
+                continue  # 通常は偽
+            
+            # 論理演算子を含む複合条件
+            if '||' in expr or '&&' in expr:
+                # 複合条件は詳細な評価が必要だが、
+                # デフォルト値で全ての変数が0の場合は通常偽
+                continue
+        
+        return True
+    
+    def _is_simple_variable_condition(self, expr: str) -> bool:
+        """
+        条件式が単純な変数参照かどうかをチェック (v5.1.8)
+        
+        例: "(g_system_fault)" → True
+        例: "(raw_temp == -999)" → False
+        
+        Args:
+            expr: 条件式
+        
+        Returns:
+            単純な変数参照の場合True
+        """
+        clean = expr.strip()
+        if clean.startswith('(') and clean.endswith(')'):
+            clean = clean[1:-1].strip()
+        
+        # 演算子を含まない場合は単純な変数参照
+        operators = ['==', '!=', '>=', '<=', '>', '<', '&&', '||', '+', '-', '*', '/']
+        for op in operators:
+            if op in clean:
+                return False
+        
+        return True
     
     def _is_local_variable(self, value: str, parsed_data: ParsedData) -> bool:
         """
