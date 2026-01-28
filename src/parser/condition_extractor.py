@@ -6,7 +6,7 @@ ASTから条件分岐を抽出
 
 import sys
 import os
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Any
 from pycparser import c_ast
 
 # パスを追加
@@ -37,6 +37,7 @@ class ConditionExtractor(c_ast.NodeVisitor):
         self.function_final_return: Optional[str] = None  # v5.1.2: 関数の最終return値
         self.all_return_statements: List[Tuple[int, str]] = []  # v5.1.4: 全return文
         self.local_var_assignments: Dict[str, str] = {}  # v5.1.6: ローカル変数の代入元関数
+        self.global_var_modifications: List[Dict[str, Any]] = []  # v5.1.7: グローバル変数の変更履歴
     
     def set_source_lines(self, source_lines: List[str]) -> None:
         """
@@ -98,12 +99,92 @@ class ConditionExtractor(c_ast.NodeVisitor):
             self.local_var_assignments = self._extract_local_var_assignments(node)
             self.logger.debug(f"ローカル変数代入: {self.local_var_assignments}")
             
+            # v5.1.7: グローバル/static変数の変更を抽出
+            self.global_var_modifications = self._extract_global_var_modifications(node)
+            self.logger.debug(f"グローバル変数変更: {len(self.global_var_modifications)}件")
+            
             self.generic_visit(node)
             self.in_target_function = False
             self.logger.debug(f"対象関数を出る: {func_name}")
         else:
             # 対象関数でない場合はスキップ
             pass
+    
+    def _extract_global_var_modifications(self, func_node: c_ast.FuncDef) -> List[Dict[str, Any]]:
+        """
+        グローバル/static変数への変更を抽出 (v5.1.7)
+        
+        例: g_total_calls++;  → {'var': 'g_total_calls', 'op': '++', 'line': 52, 'condition': None}
+        例: g_system_fault = true; → {'var': 'g_system_fault', 'op': '=', 'value': 'true', 'line': 58, 'condition': 'raw_temp == -999'}
+        
+        Args:
+            func_node: 関数定義のASTノード
+        
+        Returns:
+            変更情報のリスト
+        """
+        modifications = []
+        current_condition = None
+        condition_stack = []
+        
+        def visit_node(node, in_condition=None):
+            nonlocal current_condition
+            
+            # if文の条件を追跡
+            if isinstance(node, c_ast.If):
+                cond_str = self._node_to_str(node.cond) if node.cond else None
+                
+                # true分岐を処理
+                if node.iftrue:
+                    for child_name, child in node.iftrue.children() if hasattr(node.iftrue, 'children') else []:
+                        visit_node(child, in_condition=cond_str)
+                    if isinstance(node.iftrue, (c_ast.Assignment, c_ast.UnaryOp)):
+                        visit_node(node.iftrue, in_condition=cond_str)
+                
+                # false分岐を処理
+                if node.iffalse:
+                    for child_name, child in node.iffalse.children() if hasattr(node.iffalse, 'children') else []:
+                        visit_node(child, in_condition=f"!({cond_str})")
+                return
+            
+            # インクリメント/デクリメント演算子
+            if isinstance(node, c_ast.UnaryOp):
+                if node.op in ['++', '--', 'p++', 'p--']:
+                    if isinstance(node.expr, c_ast.ID):
+                        var_name = node.expr.name
+                        line = getattr(node, 'coord', None)
+                        line_no = line.line - self.line_offset if line else 0
+                        modifications.append({
+                            'var': var_name,
+                            'op': node.op.replace('p', ''),
+                            'value': None,
+                            'line': line_no,
+                            'condition': in_condition
+                        })
+            
+            # 代入演算子
+            if isinstance(node, c_ast.Assignment):
+                if isinstance(node.lvalue, c_ast.ID):
+                    var_name = node.lvalue.name
+                    value = self._node_to_str(node.rvalue) if node.rvalue else None
+                    line = getattr(node, 'coord', None)
+                    line_no = line.line - self.line_offset if line else 0
+                    modifications.append({
+                        'var': var_name,
+                        'op': node.op,
+                        'value': value,
+                        'line': line_no,
+                        'condition': in_condition
+                    })
+            
+            # 子ノードを再帰的に訪問
+            for child_name, child in node.children():
+                visit_node(child, in_condition=in_condition)
+        
+        if func_node.body:
+            visit_node(func_node.body)
+        
+        return modifications
     
     def _extract_local_var_assignments(self, func_node: c_ast.FuncDef) -> Dict[str, str]:
         """

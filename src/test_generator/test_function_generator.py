@@ -1374,7 +1374,7 @@ class TestFunctionGenerator:
     
     def _generate_assertions(self, test_case: TestCase, parsed_data: ParsedData) -> str:
         """
-        アサーションコードを生成 (v2.8.0で拡張)
+        アサーションコードを生成 (v5.1.7: グローバル変数アサーション拡張)
         
         Args:
             test_case: テストケース
@@ -1406,18 +1406,203 @@ class TestFunctionGenerator:
                 if expected_value is not None:
                     lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, result);")
         
-        # グローバル変数のチェック
-        for var in parsed_data.global_variables[:3]:  # 最初の3つ
-            if not self._is_function_or_enum(var, parsed_data):
-                expected_value = self._calculate_expected_variable_value(
-                    var, test_case, parsed_data
-                )
-                if expected_value is not None:
-                    lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, {var});")
+        # v5.1.7: グローバル/static変数のアサーション生成
+        global_var_assertions = self._generate_global_variable_assertions(test_case, parsed_data)
+        if global_var_assertions:
+            lines.append("")
+            lines.append("    // グローバル/static変数の確認")
+            lines.extend(global_var_assertions)
         
         lines.append("")
         
         return '\n'.join(lines)
+    
+    def _generate_global_variable_assertions(self, test_case: TestCase, 
+                                              parsed_data: ParsedData) -> List[str]:
+        """
+        グローバル/static変数のアサーションを生成 (v5.1.7)
+        
+        Args:
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            アサーション行のリスト
+        """
+        lines = []
+        
+        if not hasattr(parsed_data, 'global_var_modifications') or not parsed_data.global_var_modifications:
+            return lines
+        
+        # 変更される変数を収集（重複を排除）
+        modified_vars = {}
+        for mod in parsed_data.global_var_modifications:
+            var_name = mod['var']
+            if var_name not in modified_vars:
+                modified_vars[var_name] = []
+            modified_vars[var_name].append(mod)
+        
+        # 各変数について期待値を計算してアサーションを生成
+        for var_name, mods in modified_vars.items():
+            expected_value = self._calculate_global_var_expected_value(
+                var_name, mods, test_case, parsed_data
+            )
+            if expected_value is not None:
+                lines.append(f"    TEST_ASSERT_EQUAL({expected_value}, {var_name});")
+            else:
+                # 期待値が計算できない場合はコメントで出力
+                lines.append(f"    // TEST_ASSERT_EQUAL(/* 要確認 */, {var_name});")
+        
+        return lines
+    
+    def _calculate_global_var_expected_value(self, var_name: str, 
+                                              modifications: List[Dict], 
+                                              test_case: TestCase,
+                                              parsed_data: ParsedData) -> Optional[str]:
+        """
+        グローバル変数の期待値を計算 (v5.1.7)
+        
+        Args:
+            var_name: 変数名
+            modifications: この変数への変更リスト
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            期待値（文字列）またはNone
+        """
+        # テストケースの条件と行番号を取得
+        test_condition = test_case.condition if hasattr(test_case, 'condition') else ""
+        decision = self._evaluate_decision(test_case, parsed_data)
+        
+        # テスト対象の条件の行番号を取得
+        test_condition_line = 0
+        for cond in parsed_data.conditions:
+            if test_condition in cond.expression or cond.expression in test_condition:
+                test_condition_line = cond.line
+                break
+        
+        # 初期値を推定
+        # 1. input_valuesから取得（明示的に設定されている場合）
+        # 2. テスト条件から推定（条件式に変数が含まれている場合）
+        # 3. デフォルト値（0）
+        initial_value = 0
+        
+        if hasattr(test_case, 'input_values') and test_case.input_values:
+            if var_name in test_case.input_values:
+                val = test_case.input_values[var_name]
+                if isinstance(val, bool):
+                    initial_value = 1 if val else 0
+                elif isinstance(val, (int, float)):
+                    initial_value = int(val)
+        
+        # テスト条件から入力値を推定（条件式に変数が単独で含まれている場合）
+        # 例: if (g_system_fault) で decision=True → g_system_fault = 1
+        if var_name in test_condition:
+            # 変数が条件式の主要部分の場合（様々な形式に対応）
+            # "if (g_system_fault)", "(g_system_fault)", "g_system_fault" など
+            clean_condition = test_condition.strip()
+            if clean_condition.startswith('if '):
+                clean_condition = clean_condition[3:].strip()
+            if clean_condition.startswith('(') and clean_condition.endswith(')'):
+                clean_condition = clean_condition[1:-1].strip()
+            
+            if clean_condition == var_name:
+                initial_value = 1 if decision else 0
+        
+        current_value = initial_value
+        
+        for mod in modifications:
+            mod_condition = mod.get('condition')
+            mod_op = mod.get('op', '=')
+            mod_value = mod.get('value')
+            mod_line = mod.get('line', 0)
+            
+            # 変更が実行されるかどうかを判定
+            should_apply = self._should_apply_modification_v2(
+                mod_condition, mod_line, test_condition, test_condition_line, 
+                decision, test_case, parsed_data
+            )
+            
+            if should_apply:
+                if mod_op in ['++', 'p++']:
+                    current_value += 1
+                elif mod_op in ['--', 'p--']:
+                    current_value -= 1
+                elif mod_op == '=':
+                    if mod_value:
+                        # 値を解析
+                        if mod_value == 'true':
+                            current_value = 1
+                        elif mod_value == 'false':
+                            current_value = 0
+                        elif mod_value.lstrip('-').isdigit():
+                            current_value = int(mod_value)
+                        else:
+                            # 変数名の場合、入力値から取得を試みる
+                            if hasattr(test_case, 'input_values') and test_case.input_values:
+                                if mod_value in test_case.input_values:
+                                    val = test_case.input_values[mod_value]
+                                    if isinstance(val, (int, float)):
+                                        current_value = int(val)
+                                    else:
+                                        return None
+                                else:
+                                    return None
+                            else:
+                                return None
+        
+        return str(current_value)
+    
+    def _should_apply_modification_v2(self, mod_condition: Optional[str],
+                                       mod_line: int,
+                                       test_condition: str,
+                                       test_condition_line: int,
+                                       decision: bool,
+                                       test_case: TestCase,
+                                       parsed_data: ParsedData) -> bool:
+        """
+        変更が適用されるかどうかを判定（改善版） (v5.1.7)
+        
+        Args:
+            mod_condition: 変更の条件（Noneの場合は無条件）
+            mod_line: 変更の行番号
+            test_condition: テストケースの条件
+            test_condition_line: テストケースの条件の行番号
+            decision: テストケースの決定結果
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            適用される場合True
+        """
+        if mod_condition is None:
+            # 無条件の変更
+            # テスト条件が真で早期returnする場合、その後の変更は適用されない
+            if decision and test_condition_line > 0 and mod_line > test_condition_line:
+                # テスト条件より後の行にある無条件変更
+                # → テスト条件が真で早期returnするなら適用されない
+                return False
+            return True
+        
+        # 条件付き変更
+        # テストケースの条件と変更の条件を比較
+        if mod_condition in test_condition or test_condition in mod_condition:
+            # 同じ条件をテストしている
+            return decision
+        
+        # 変更の条件がテストケースの条件より前にある場合
+        # その条件が真なら変更が適用されるが、テストケースに到達していないことを意味する
+        # → テストケースに到達しているということは、前の条件は偽だった
+        
+        # 変更の条件がテストケースの条件より後にある場合
+        # テスト条件が真で早期returnするなら、その変更には到達しない
+        if test_condition_line > 0 and mod_line > test_condition_line:
+            if decision:
+                # テスト条件が真 → 早期return → 後の変更は適用されない
+                return False
+        
+        return False
     
     def _calculate_expected_return_value(self, test_case: TestCase, 
                                           parsed_data: ParsedData) -> Optional[str]:
