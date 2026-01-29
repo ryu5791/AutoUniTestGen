@@ -443,16 +443,21 @@ class TestFunctionGenerator:
             inits.append(f"{var_name} = 1  // 前提条件: {expr} を真にする")
             return inits
         
-        # 比較条件: (g_total_calls > 1) → g_total_calls = 2
+        # 比較条件: (g_total_calls > 1) → g_total_calls を適切に設定
         import re
         # > 演算子
         match = re.search(r'(\w+)\s*>\s*(\d+)', expr)
         if match:
             var_name = match.group(1)
             threshold = int(match.group(2))
-            # 関数内で++される可能性を考慮
-            if var_name == 'g_total_calls':
-                # 関数呼び出し時に++されるので、threshold以上を設定
+            
+            # 変数が関数内で++されるかチェック
+            is_incremented = self._is_variable_incremented_before_condition(
+                var_name, condition.line, parsed_data
+            )
+            
+            if is_incremented:
+                # 関数内で++されるので、threshold を設定（++後に threshold+1 > threshold）
                 inits.append(f"{var_name} = {threshold}  // 前提条件: {expr} を真にする（関数内で++される）")
             else:
                 inits.append(f"{var_name} = {threshold + 1}  // 前提条件: {expr} を真にする")
@@ -475,6 +480,32 @@ class TestFunctionGenerator:
             return inits
         
         return inits
+    
+    def _is_variable_incremented_before_condition(self, var_name: str, 
+                                                    condition_line: int,
+                                                    parsed_data: ParsedData) -> bool:
+        """
+        変数が条件より前で++されるかチェック (v5.1.10)
+        
+        Args:
+            var_name: 変数名
+            condition_line: 条件の行番号
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            条件より前で++される場合True
+        """
+        if not hasattr(parsed_data, 'global_var_modifications'):
+            return False
+        
+        for mod in parsed_data.global_var_modifications:
+            if mod['var'] == var_name and mod['op'] in ['++', 'p++']:
+                mod_line = mod.get('line', 0)
+                # 条件より前で無条件に++される場合
+                if mod_line < condition_line and mod.get('condition') is None:
+                    return True
+        
+        return False
     
     def _is_simple_variable_condition_v2(self, expr: str) -> bool:
         """
@@ -1628,7 +1659,7 @@ class TestFunctionGenerator:
                                               test_case: TestCase,
                                               parsed_data: ParsedData) -> Optional[str]:
         """
-        グローバル変数の期待値を計算 (v5.1.7)
+        グローバル変数の期待値を計算 (v5.1.10: 入力値推定改善)
         
         Args:
             var_name: 変数名
@@ -1645,17 +1676,38 @@ class TestFunctionGenerator:
         
         # テスト対象の条件の行番号を取得
         test_condition_line = 0
-        for cond in parsed_data.conditions:
+        matching_condition = None
+        matching_idx = -1
+        for i, cond in enumerate(parsed_data.conditions):
             if test_condition in cond.expression or cond.expression in test_condition:
                 test_condition_line = cond.line
+                matching_condition = cond
+                matching_idx = i
                 break
         
-        # 初期値を推定
-        # 1. input_valuesから取得（明示的に設定されている場合）
-        # 2. テスト条件から推定（条件式に変数が含まれている場合）
-        # 3. デフォルト値（0）
+        # 初期値を推定（デフォルト0）
         initial_value = 0
         
+        # 1. テスト条件から入力値を推定（条件式に変数が含まれる場合）
+        if var_name in test_condition:
+            initial_value = self._estimate_input_from_condition(
+                var_name, test_condition, decision, parsed_data
+            )
+        
+        # 2. 前提条件の入力値を推定（ネストされた条件の場合）
+        # 例: test_07 は条件3のテストだが、条件2 (g_total_calls > 1) が前提
+        if matching_idx > 0:
+            prev_cond = parsed_data.conditions[matching_idx - 1]
+            prev_line = prev_cond.line
+            # 行番号の差が2以内なら前提条件と判断
+            if test_condition_line - prev_line <= 2:
+                if var_name in prev_cond.expression:
+                    # 前提条件から入力値を推定（前提条件は真）
+                    initial_value = self._estimate_input_from_condition(
+                        var_name, prev_cond.expression, True, parsed_data
+                    )
+        
+        # 3. input_valuesから取得（明示的に設定されている場合）
         if hasattr(test_case, 'input_values') and test_case.input_values:
             if var_name in test_case.input_values:
                 val = test_case.input_values[var_name]
@@ -1663,20 +1715,6 @@ class TestFunctionGenerator:
                     initial_value = 1 if val else 0
                 elif isinstance(val, (int, float)):
                     initial_value = int(val)
-        
-        # テスト条件から入力値を推定（条件式に変数が単独で含まれている場合）
-        # 例: if (g_system_fault) で decision=True → g_system_fault = 1
-        if var_name in test_condition:
-            # 変数が条件式の主要部分の場合（様々な形式に対応）
-            # "if (g_system_fault)", "(g_system_fault)", "g_system_fault" など
-            clean_condition = test_condition.strip()
-            if clean_condition.startswith('if '):
-                clean_condition = clean_condition[3:].strip()
-            if clean_condition.startswith('(') and clean_condition.endswith(')'):
-                clean_condition = clean_condition[1:-1].strip()
-            
-            if clean_condition == var_name:
-                initial_value = 1 if decision else 0
         
         current_value = initial_value
         
@@ -1699,7 +1737,6 @@ class TestFunctionGenerator:
                     current_value -= 1
                 elif mod_op == '=':
                     if mod_value:
-                        # 値を解析
                         if mod_value == 'true':
                             current_value = 1
                         elif mod_value == 'false':
@@ -1707,20 +1744,71 @@ class TestFunctionGenerator:
                         elif mod_value.lstrip('-').isdigit():
                             current_value = int(mod_value)
                         else:
-                            # 変数名の場合、入力値から取得を試みる
-                            if hasattr(test_case, 'input_values') and test_case.input_values:
-                                if mod_value in test_case.input_values:
-                                    val = test_case.input_values[mod_value]
-                                    if isinstance(val, (int, float)):
-                                        current_value = int(val)
-                                    else:
-                                        return None
-                                else:
-                                    return None
-                            else:
-                                return None
+                            return None  # 複雑なケースはコメント出力
         
         return str(current_value)
+    
+    def _estimate_input_from_condition(self, var_name: str, condition: str, 
+                                        decision: bool, parsed_data: ParsedData) -> int:
+        """
+        条件式から入力値を推定 (v5.1.10)
+        
+        Args:
+            var_name: 変数名
+            condition: 条件式
+            decision: 条件の決定結果（真/偽）
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            推定された入力値
+        """
+        import re
+        
+        # 単純な変数条件: (g_system_fault)
+        clean_condition = condition.strip()
+        if clean_condition.startswith('if '):
+            clean_condition = clean_condition[3:].strip()
+        if clean_condition.startswith('(') and clean_condition.endswith(')'):
+            inner = clean_condition[1:-1].strip()
+            if inner == var_name:
+                return 1 if decision else 0
+        
+        # 比較条件: (g_total_calls > 1)
+        match = re.search(rf'{var_name}\s*>\s*(\d+)', condition)
+        if match:
+            threshold = int(match.group(1))
+            is_incremented = self._is_variable_incremented_in_function(var_name, parsed_data)
+            if is_incremented:
+                return threshold if decision else threshold - 1
+            else:
+                return threshold + 1 if decision else threshold
+        
+        match = re.search(rf'{var_name}\s*>=\s*(\d+)', condition)
+        if match:
+            threshold = int(match.group(1))
+            return threshold if decision else threshold - 1
+        
+        match = re.search(rf'{var_name}\s*==\s*(-?\d+)', condition)
+        if match:
+            value = int(match.group(1))
+            return value if decision else value + 1
+        
+        return 0
+    
+    def _is_variable_incremented_in_function(self, var_name: str, 
+                                              parsed_data: ParsedData) -> bool:
+        """
+        変数が関数内で無条件に++されるかチェック (v5.1.10)
+        """
+        if not hasattr(parsed_data, 'global_var_modifications'):
+            return False
+        
+        for mod in parsed_data.global_var_modifications:
+            if mod['var'] == var_name and mod['op'] in ['++', 'p++']:
+                if mod.get('condition') is None:
+                    return True
+        
+        return False
     
     def _should_apply_modification_v2(self, mod_condition: Optional[str],
                                        mod_line: int,

@@ -466,12 +466,24 @@ class BoundaryValueCalculator:
                 # 数値との比較
                 # v4.2.1: ビットフィールド制約を考慮
                 # v4.3.0: 型情報を考慮
+                # v5.1.10: 変数が関数内で++されるかを考慮
                 value_resolver = ValueResolver(parsed_data)
                 max_value = value_resolver.get_bitfield_max_value(variable)
                 var_type = value_resolver.get_variable_type(variable)
                 type_max = value_resolver.get_max_value_for_type(var_type) if var_type else None
                 
+                # v5.1.10: 変数が関数内で++されるかチェック
+                is_incremented = self._is_variable_incremented(variable, parsed_data)
+                
                 test_value = self.calculate_boundary(operator, value, truth)
+                
+                # v5.1.10: ++される変数の場合、入力値を調整
+                if is_incremented and operator == '>' and truth == 'T':
+                    # > threshold を真にするには、入力時 threshold を設定（++後に threshold+1 > threshold）
+                    test_value = value
+                elif is_incremented and operator == '>' and truth == 'F':
+                    # > threshold を偽にするには、入力時 threshold-1 を設定（++後に threshold <= threshold）
+                    test_value = value - 1
                 
                 # ビットフィールドの場合、最大値を超えていないかチェック
                 if max_value is not None and test_value > max_value:
@@ -548,6 +560,31 @@ class BoundaryValueCalculator:
                 result.append(var)
         
         return list(set(result))  # 重複を除去
+    
+    def _is_variable_incremented(self, variable: str, parsed_data: Any) -> bool:
+        """
+        変数が関数内で++されるかチェック (v5.1.10)
+        
+        Args:
+            variable: 変数名
+            parsed_data: ParsedDataオブジェクト
+        
+        Returns:
+            関数内で++される場合True
+        """
+        if parsed_data is None:
+            return False
+        
+        if not hasattr(parsed_data, 'global_var_modifications'):
+            return False
+        
+        for mod in parsed_data.global_var_modifications:
+            if mod['var'] == variable and mod['op'] in ['++', 'p++']:
+                # 無条件で++される場合
+                if mod.get('condition') is None:
+                    return True
+        
+        return False
     
     def extract_assignable_variables(self, expression: str, parsed_data: Any) -> Tuple[List[str], List[Tuple[str, str]]]:
         """
