@@ -127,8 +127,18 @@ class UnityTestGenerator:
             modified_source, parsed_data.function_name
         )
         
+        # v5.1.11: 対象関数の実装を抽出（static変換後に抽出）
+        target_function_code = self._extract_target_function(
+            modified_source, parsed_data.function_name
+        )
+        
         # v4.8.7: main関数と対象外関数を除外
         modified_source = self._remove_non_target_functions(
+            modified_source, parsed_data.function_name
+        )
+        
+        # v5.1.11: 対象関数の実装を除外（プロトタイプ宣言は残す）
+        modified_source = self._remove_target_function_implementation(
             modified_source, parsed_data.function_name
         )
         
@@ -166,6 +176,13 @@ class UnityTestGenerator:
         if main_function:
             parts.append("\n// ===== main関数 =====")
             parts.append(main_function)
+        
+        # v5.1.11: 対象関数の実装をファイル末尾に配置
+        if target_function_code:
+            parts.append("\n//" + "=" * 78)
+            parts.append("// 対象関数")
+            parts.append("//" + "=" * 78)
+            parts.append(target_function_code)
         
         result = '\n'.join(parts)
         
@@ -360,6 +377,116 @@ class UnityTestGenerator:
                 if brace_count == 0:
                     in_function = False
                     current_function_name = None
+            
+            i += 1
+        
+        return '\n'.join(result_lines)
+    
+    def _extract_target_function(self, source_code: str, target_function_name: str) -> str:
+        """
+        対象関数の実装を抽出する (v5.1.11)
+        
+        Args:
+            source_code: ソースコード
+            target_function_name: 対象関数名
+        
+        Returns:
+            対象関数の実装コード
+        """
+        import re
+        
+        if not target_function_name:
+            return ""
+        
+        lines = source_code.split('\n')
+        function_lines = []
+        
+        in_function = False
+        brace_count = 0
+        
+        # 関数定義の開始を検出するパターン
+        func_start_pattern = re.compile(
+            r'^(\s*)(static\s+|extern\s+|inline\s+)*((?:const\s+)?(?:unsigned\s+|signed\s+)?(?:volatile\s+)?(?:\w+)(?:\s*\*)*)\s+(' + 
+            re.escape(target_function_name) + r')\s*\([^)]*\)\s*{'
+        )
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            if not in_function:
+                match = func_start_pattern.match(line)
+                if match:
+                    in_function = True
+                    function_lines.append(line)
+                    brace_count = line.count('{') - line.count('}')
+                    if brace_count == 0:
+                        in_function = False
+                        break
+            else:
+                function_lines.append(line)
+                brace_count += line.count('{') - line.count('}')
+                if brace_count == 0:
+                    in_function = False
+                    break
+            
+            i += 1
+        
+        return '\n'.join(function_lines)
+    
+    def _remove_target_function_implementation(self, source_code: str, 
+                                                target_function_name: str) -> str:
+        """
+        対象関数の実装を除去する (v5.1.11)
+        
+        プロトタイプ宣言は既に存在するので追加しない
+        
+        Args:
+            source_code: ソースコード
+            target_function_name: 対象関数名
+        
+        Returns:
+            実装を除去したソースコード
+        """
+        import re
+        
+        if not target_function_name:
+            return source_code
+        
+        lines = source_code.split('\n')
+        result_lines = []
+        
+        in_function = False
+        brace_count = 0
+        
+        # 関数定義の開始を検出するパターン
+        func_start_pattern = re.compile(
+            r'^(\s*)(static\s+|extern\s+|inline\s+)*((?:const\s+)?(?:unsigned\s+|signed\s+)?(?:volatile\s+)?(?:\w+)(?:\s*\*)*)\s+(' + 
+            re.escape(target_function_name) + r')\s*\(([^)]*)\)\s*{'
+        )
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            
+            if not in_function:
+                match = func_start_pattern.match(line)
+                if match:
+                    in_function = True
+                    brace_count = line.count('{') - line.count('}')
+                    
+                    # 実装は除去（プロトタイプ宣言は既に存在するので追加しない）
+                    if brace_count == 0:
+                        in_function = False
+                    i += 1
+                    continue
+                else:
+                    result_lines.append(line)
+            else:
+                # 関数内の行はスキップ
+                brace_count += line.count('{') - line.count('}')
+                if brace_count == 0:
+                    in_function = False
             
             i += 1
         
@@ -782,30 +909,6 @@ class UnityTestGenerator:
         return False
         
         return '\n'.join(lines)
-    
-    def _extract_target_function(self, source_code: str, function_name: str) -> Optional[str]:
-        """
-        テスト対象関数の本体を抽出（v2.2の新機能）
-        
-        Args:
-            source_code: 元のソースコード
-            function_name: 対象関数名
-            
-        Returns:
-            抽出されたコードセクション
-        """
-        try:
-            # 関数本体のみを抽出（依存関係は今回は含めない）
-            extracted = self.code_extractor.extract_function_only(source_code, function_name)
-            
-            if extracted and extracted.has_content():
-                return extracted.to_code_section()
-            
-            return None
-            
-        except Exception as e:
-            self.logger.error(f"関数抽出中にエラーが発生: {e}")
-            return None
     
     def _generate_main_function(self, truth_table: TruthTableData, parsed_data: ParsedData) -> str:
         """
