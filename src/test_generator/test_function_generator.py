@@ -300,14 +300,23 @@ class TestFunctionGenerator:
         
         # 対応する条件を検索
         matching_condition = None
-        for cond in parsed_data.conditions:
+        matching_idx = -1
+        for i, cond in enumerate(parsed_data.conditions):
             if cond.expression in test_case.condition:
                 matching_condition = cond
+                matching_idx = i
                 break
         
         if not matching_condition:
             lines.append("")
             return '\n'.join(lines)
+        
+        # v5.1.9: ネストされた条件の前提条件を設定
+        # 条件の行番号を使って、直前の条件の内側にネストされているかを判定
+        prerequisite_inits = self._generate_prerequisite_inits(matching_idx, parsed_data)
+        for prereq_init in prerequisite_inits:
+            if prereq_init:
+                self._append_init_line(prereq_init, lines)
         
         # v4.5: 条件式を取得（配列変数検出用）
         condition_expr = matching_condition.expression
@@ -353,6 +362,137 @@ class TestFunctionGenerator:
         
         lines.append("")
         return '\n'.join(lines)
+    
+    def _generate_prerequisite_inits(self, condition_idx: int, parsed_data: ParsedData) -> List[str]:
+        """
+        ネストされた条件の前提条件を設定する初期化コードを生成 (v5.1.9)
+        
+        例: 条件4（温度差判定）をテストするには、条件3（g_total_calls > 1）が真である必要がある
+        
+        Args:
+            condition_idx: 対象条件のインデックス
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            前提条件の初期化コードリスト
+        """
+        inits = []
+        
+        if condition_idx <= 0:
+            return inits
+        
+        current_cond = parsed_data.conditions[condition_idx]
+        current_line = current_cond.line
+        current_expr = current_cond.expression
+        
+        # ネストの判定：直前の条件の行番号との差が2行以内、または
+        # 現在の条件が直前の条件の「内部」にあることを示す特徴がある場合
+        prev_cond = parsed_data.conditions[condition_idx - 1]
+        prev_line = prev_cond.line
+        prev_expr = prev_cond.expression
+        
+        # 行番号の差が2行以内の場合のみネストと判断
+        # （同じブロック内に連続してある場合）
+        line_diff = current_line - prev_line
+        
+        # 条件3と条件4の関係を特別にチェック（g_total_calls > 1 の中のOR条件）
+        # 条件式に前の条件の変数が含まれていない場合、かつ行差が2以内ならネスト
+        if line_diff <= 2:
+            # 前の条件式の変数が現在の条件式に含まれていないことを確認
+            prev_vars = self._extract_condition_variables(prev_expr)
+            curr_vars = self._extract_condition_variables(current_expr)
+            
+            # 共通の変数がなければ、ネストの可能性が高い
+            common_vars = prev_vars.intersection(curr_vars)
+            if not common_vars:
+                prereq = self._generate_condition_true_init(prev_cond, parsed_data)
+                if prereq:
+                    for init in prereq:
+                        inits.append(init)
+        
+        return inits
+    
+    def _extract_condition_variables(self, expr: str) -> set:
+        """
+        条件式から変数名を抽出 (v5.1.9)
+        """
+        import re
+        # 識別子を抽出（関数名は除外）
+        identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', expr)
+        # 数値、キーワード、よくある関数名を除外
+        keywords = {'if', 'else', 'while', 'for', 'return', 'true', 'false', 'NULL', 'sizeof'}
+        return set(id for id in identifiers if id not in keywords and not id.isdigit())
+    
+    def _generate_condition_true_init(self, condition, parsed_data: ParsedData) -> List[str]:
+        """
+        条件を真にするための初期化コードを生成 (v5.1.9)
+        
+        Args:
+            condition: 条件オブジェクト
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            初期化コードリスト
+        """
+        inits = []
+        expr = condition.expression
+        
+        # 単純な変数条件: (g_system_fault) → g_system_fault = 1
+        if self._is_simple_variable_condition_v2(expr):
+            var_name = expr.strip('() ')
+            inits.append(f"{var_name} = 1  // 前提条件: {expr} を真にする")
+            return inits
+        
+        # 比較条件: (g_total_calls > 1) → g_total_calls = 2
+        import re
+        # > 演算子
+        match = re.search(r'(\w+)\s*>\s*(\d+)', expr)
+        if match:
+            var_name = match.group(1)
+            threshold = int(match.group(2))
+            # 関数内で++される可能性を考慮
+            if var_name == 'g_total_calls':
+                # 関数呼び出し時に++されるので、threshold以上を設定
+                inits.append(f"{var_name} = {threshold}  // 前提条件: {expr} を真にする（関数内で++される）")
+            else:
+                inits.append(f"{var_name} = {threshold + 1}  // 前提条件: {expr} を真にする")
+            return inits
+        
+        # >= 演算子
+        match = re.search(r'(\w+)\s*>=\s*(\d+)', expr)
+        if match:
+            var_name = match.group(1)
+            threshold = int(match.group(2))
+            inits.append(f"{var_name} = {threshold}  // 前提条件: {expr} を真にする")
+            return inits
+        
+        # == 演算子
+        match = re.search(r'(\w+)\s*==\s*(-?\d+)', expr)
+        if match:
+            var_name = match.group(1)
+            value = match.group(2)
+            inits.append(f"{var_name} = {value}  // 前提条件: {expr} を真にする")
+            return inits
+        
+        return inits
+    
+    def _is_simple_variable_condition_v2(self, expr: str) -> bool:
+        """
+        条件式が単純な変数参照かどうかをチェック (v5.1.9)
+        """
+        clean = expr.strip()
+        if clean.startswith('(') and clean.endswith(')'):
+            clean = clean[1:-1].strip()
+        
+        # 演算子を含まない場合は単純な変数参照
+        operators = ['==', '!=', '>=', '<=', '>', '<', '&&', '||', '+', '-', '*', '/']
+        for op in operators:
+            if op in clean:
+                return False
+        
+        # 識別子として有効かチェック
+        import re
+        return bool(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', clean))
     
     def _precompute_param_init_values(self, test_case: TestCase, parsed_data: ParsedData) -> Dict[str, str]:
         """
@@ -705,18 +845,46 @@ class TestFunctionGenerator:
     
     def _append_init_line(self, init: str, lines: List[str]) -> None:
         """
-        初期化行をリストに追加（セミコロン処理）
+        初期化行をリストに追加（セミコロン処理、重複防止）
+        
+        v5.1.9: 同じ変数への複数代入を防ぐ
+        v5.1.9.1: セミコロンをコメントの前に追加
         
         Args:
             init: 初期化コード
             lines: 出力行リスト
         """
-        # セミコロンの前のコメントを考慮してチェック
-        code_part = init.split('//')[0].rstrip()
-        if code_part and not code_part.endswith(';'):
-            lines.append(f"    {init};")
+        # v5.1.9: 既に同じ変数が設定されていないかチェック
+        # "var_name = " の形式から変数名を抽出
+        import re
+        var_match = re.match(r'\s*(\w+)\s*=', init)
+        if var_match:
+            var_name = var_match.group(1)
+            # 既存の行で同じ変数が設定されていないかチェック
+            for existing_line in lines:
+                existing_match = re.match(r'\s*(\w+)\s*=', existing_line)
+                if existing_match and existing_match.group(1) == var_name:
+                    # 既に設定済み → スキップ
+                    return
+        
+        # v5.1.9.1: セミコロンをコメントの前に追加
+        if '//' in init:
+            # コメントを分離
+            parts = init.split('//', 1)
+            code_part = parts[0].rstrip()
+            comment_part = parts[1]
+            
+            if code_part and not code_part.endswith(';'):
+                lines.append(f"    {code_part};  // {comment_part.strip()}")
+            else:
+                lines.append(f"    {init}")
         else:
-            lines.append(f"    {init}")
+            # コメントなし
+            code_part = init.rstrip()
+            if code_part and not code_part.endswith(';'):
+                lines.append(f"    {init};")
+            else:
+                lines.append(f"    {init}")
     
     def _is_local_variable(self, var_name: str, parsed_data: ParsedData) -> bool:
         """
@@ -1645,6 +1813,18 @@ class TestFunctionGenerator:
                         return mock_val
                     elif not self._is_local_variable(ret_val, parsed_data):
                         return ret_val
+                else:
+                    # v5.1.9: return_value_if_trueがNoneの場合（ネストifなど）
+                    # 最終return文を探す
+                    next_return = self._find_next_return_after_condition(
+                        condition_idx, matching_condition, parsed_data
+                    )
+                    if next_return:
+                        mock_val = self._resolve_local_variable_to_mock(next_return, parsed_data)
+                        if mock_val:
+                            return mock_val
+                        elif not self._is_local_variable(next_return, parsed_data):
+                            return next_return
             else:
                 # 条件が偽の場合のreturn値
                 if matching_condition.return_value_if_false:

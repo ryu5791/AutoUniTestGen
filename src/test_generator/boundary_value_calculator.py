@@ -225,6 +225,7 @@ class BoundaryValueCalculator:
         v3.3.0追加: parsed_dataを使用してenum/マクロ値を解決
         v4.2.0修正: 数値リテラルや関数呼び出し含む式への対応を強化
         v4.8.5追加: strlen()を含む条件の特別処理
+        v5.1.9追加: var > (var2 + N) 形式の複雑な比較条件を処理
         
         Args:
             expression: 条件式
@@ -234,6 +235,67 @@ class BoundaryValueCalculator:
         Returns:
             テスト値の設定コード（例: "v10 = 31"）
         """
+        # v5.1.9: var > (var2 + N) または var < (var2 - N) 形式の処理
+        # 例: raw_temp > (g_last_temp + 50)
+        complex_match = re.search(r'(\w+)\s*(>|>=|<|<=)\s*\(\s*(\w+)\s*([+\-])\s*(\d+)\s*\)', expression)
+        if complex_match:
+            var1 = complex_match.group(1)  # raw_temp
+            operator = complex_match.group(2)  # >
+            var2 = complex_match.group(3)  # g_last_temp
+            arith_op = complex_match.group(4)  # +
+            offset = int(complex_match.group(5))  # 50
+            
+            # var2のデフォルト値を0と仮定
+            var2_default = 0
+            
+            if operator == '>':
+                if arith_op == '+':
+                    threshold = var2_default + offset  # 0 + 50 = 50
+                else:
+                    threshold = var2_default - offset  # 0 - 50 = -50
+                
+                if truth == 'T':
+                    # var1 > threshold を満たす値
+                    return f"{var1} = {threshold + 1}  // {var1} > ({var2} + {offset}) を満たす"
+                else:
+                    # var1 <= threshold を満たす値
+                    return f"{var1} = {threshold}  // {var1} <= ({var2} + {offset}) を満たす"
+            
+            elif operator == '<':
+                if arith_op == '+':
+                    threshold = var2_default + offset
+                else:
+                    threshold = var2_default - offset
+                
+                if truth == 'T':
+                    # var1 < threshold を満たす値
+                    return f"{var1} = {threshold - 1}  // {var1} < ({var2} {arith_op} {offset}) を満たす"
+                else:
+                    # var1 >= threshold を満たす値
+                    return f"{var1} = {threshold}  // {var1} >= ({var2} {arith_op} {offset}) を満たす"
+            
+            elif operator == '>=':
+                if arith_op == '+':
+                    threshold = var2_default + offset
+                else:
+                    threshold = var2_default - offset
+                
+                if truth == 'T':
+                    return f"{var1} = {threshold}  // {var1} >= ({var2} {arith_op} {offset}) を満たす"
+                else:
+                    return f"{var1} = {threshold - 1}  // {var1} < ({var2} {arith_op} {offset}) を満たす"
+            
+            elif operator == '<=':
+                if arith_op == '+':
+                    threshold = var2_default + offset
+                else:
+                    threshold = var2_default - offset
+                
+                if truth == 'T':
+                    return f"{var1} = {threshold}  // {var1} <= ({var2} {arith_op} {offset}) を満たす"
+                else:
+                    return f"{var1} = {threshold + 1}  // {var1} > ({var2} {arith_op} {offset}) を満たす"
+        
         # v4.8.5: strlen(var) > 0 のような条件の特別処理
         # 括弧で囲まれている場合にも対応（re.searchを使用）
         strlen_match = re.search(r'strlen\s*\(\s*(\w+)\s*\)\s*(>|>=|==|!=|<|<=)\s*(\d+)', expression)
