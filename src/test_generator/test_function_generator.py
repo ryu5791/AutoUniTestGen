@@ -713,6 +713,7 @@ class TestFunctionGenerator:
                    構造体メンバー名への代入を防止（問題B対応）
         v4.3.3.1: AssignableVariableCheckerを使用した一元的な判定
         v4.5: 条件式から配列変数を検出して登録
+        v5.1.13.4: mock_プレフィックスの変数は常に代入可能
         
         Args:
             init: 生成された初期化コード
@@ -737,6 +738,10 @@ class TestFunctionGenerator:
         
         var_part = match.group(1).strip()
         value_part = match.group(2).strip()
+        
+        # v5.1.13.4: mock_プレフィックスの変数は常に代入可能
+        if var_part.startswith('mock_'):
+            return init
         
         # AssignableVariableCheckerを使用して判定
         checker = AssignableVariableChecker(parsed_data)
@@ -1216,7 +1221,11 @@ class TestFunctionGenerator:
                     stdlib_funcs, value_resolver, parsed_data
                 )
                 if processed:
-                    init_list.append(processed)
+                    # v5.1.13.2: リストの場合は展開
+                    if isinstance(processed, list):
+                        init_list.extend(processed)
+                    else:
+                        init_list.append(processed)
         
         # 偽(F)の条件を後に処理（同じ変数が既に設定されていればスキップ）
         for cond, truth_val, test_value in condition_values:
@@ -1226,15 +1235,23 @@ class TestFunctionGenerator:
                     stdlib_funcs, value_resolver, parsed_data
                 )
                 if processed:
-                    init_list.append(processed)
+                    # v5.1.13.2: リストの場合は展開
+                    if isinstance(processed, list):
+                        init_list.extend(processed)
+                    else:
+                        init_list.append(processed)
         
         return init_list
     
     def _process_condition_value(self, cond: str, truth_val: str, test_value: Optional[str],
                                   assigned_vars: set, stdlib_funcs: set,
-                                  value_resolver, parsed_data: ParsedData) -> Optional[str]:
+                                  value_resolver, parsed_data: ParsedData) -> Optional[List[str]]:
         """
         条件の値を処理して初期化コードを生成 (v5.1.12追加)
+        
+        v5.1.13: ローカル変数の場合はモック戻り値を設定
+        v5.1.13.2: 複数の初期化コードをリストとして返す
+        v5.1.14: ローカル変数のモック設定が生成された場合、直接代入をスキップ
         
         Args:
             cond: 条件式
@@ -1246,27 +1263,40 @@ class TestFunctionGenerator:
             parsed_data: 解析済みデータ
         
         Returns:
-            初期化コード（スキップする場合はNone）
+            初期化コードのリスト（スキップする場合はNone）
         """
+        results = []
+        
+        # v5.1.13: まずローカル変数がないか確認
+        local_var_results = self._try_generate_mock_for_local_var(
+            cond, truth_val, assigned_vars, parsed_data
+        )
+        if local_var_results:
+            results.extend(local_var_results)
+            # v5.1.14: ローカル変数のモック設定が生成されたら、test_valueはスキップ
+            # (test_valueはローカル変数への直接代入で、_process_init_codeでTODOコメントになる)
+            return results
+        
         if test_value:
             # 関数呼び出しが含まれる場合はコメントとしてそのまま追加
             if test_value.startswith("//"):
-                return test_value
+                results.append(test_value)
             else:
                 # 変数名を抽出
                 var_match = re.match(r'(\w+)\s*=', test_value)
                 if var_match:
                     var_name = var_match.group(1)
                     # 既に設定済みならスキップ
-                    if var_name in assigned_vars:
-                        return None
-                    assigned_vars.add(var_name)
-                
-                # 関数やenum定数の誤使用を修正
-                test_value = self._validate_and_fix_init_code(test_value, parsed_data)
-                return test_value
+                    if var_name not in assigned_vars:
+                        assigned_vars.add(var_name)
+                        # 関数やenum定数の誤使用を修正
+                        test_value = self._validate_and_fix_init_code(test_value, parsed_data)
+                        results.append(test_value)
+                else:
+                    # 変数名を抽出できない場合もそのまま追加
+                    results.append(test_value)
         else:
-            # デフォルト値
+            # デフォルト値（test_valueがない場合のみ）
             variables = self.boundary_calc.extract_variables(cond)
             if variables:
                 # v4.8.5: 標準ライブラリ関数名を除外
@@ -1275,30 +1305,200 @@ class TestFunctionGenerator:
                     # すべての変数が関数名の場合、条件式に含まれる関数のモック設定を提案
                     func_names = [v for v in variables if v in stdlib_funcs]
                     if func_names:
-                        return f"// {func_names[0]}() の戻り値でテスト条件が決まります"
-                    return None
-                
-                var = valid_vars[0]
-                
-                # 既に設定済みならスキップ
-                if var in assigned_vars:
-                    return None
-                
-                # 関数呼び出しかチェック
-                if self._is_function_call_pattern(var):
-                    func_name = var.replace('()', '').strip()
-                    return f"// mock_{func_name}_return_value を設定してください"
-                
-                # 関数またはenum定数でないことを確認
-                if self._is_function_or_enum(var, parsed_data):
-                    return f"// {var}は関数またはenum定数のため初期化できません"
+                        results.append(f"// {func_names[0]}() の戻り値でテスト条件が決まります")
                 else:
-                    assigned_vars.add(var)
-                    # v3.3.0: ValueResolverを使用
-                    init_val, comment = value_resolver.get_boolean_init_value(truth_val)
-                    return f"{var} = {init_val};  // {comment}"
+                    var = valid_vars[0]
+                    
+                    # 既に設定済みでないかチェック
+                    if var not in assigned_vars:
+                        # 関数呼び出しかチェック
+                        if self._is_function_call_pattern(var):
+                            func_name = var.replace('()', '').strip()
+                            results.append(f"// mock_{func_name}_return_value を設定してください")
+                        # 関数またはenum定数でないことを確認
+                        elif self._is_function_or_enum(var, parsed_data):
+                            results.append(f"// {var}は関数またはenum定数のため初期化できません")
+                        else:
+                            assigned_vars.add(var)
+                            # v3.3.0: ValueResolverを使用
+                            init_val, comment = value_resolver.get_boolean_init_value(truth_val)
+                            results.append(f"{var} = {init_val};  // {comment}")
+        
+        return results if results else None
+    
+    def _try_generate_mock_for_local_var(self, cond: str, truth_val: str,
+                                          assigned_vars: set, 
+                                          parsed_data: ParsedData) -> Optional[List[str]]:
+        """
+        ローカル変数の条件に対してモック戻り値設定コードを生成 (v5.1.13追加)
+        
+        条件式にローカル変数が含まれており、そのローカル変数が外部関数の
+        戻り値から初期化されている場合、モック戻り値を設定するコードを生成。
+        
+        v5.1.13.1: 同じ関数から複数の変数が派生する場合は入力パラメータで制御
+        v5.1.13.2: 複数のローカル変数を処理してリストとして返す
+        
+        Args:
+            cond: 条件式 (例: "risk >= 2", "temp > 40")
+            truth_val: 真偽値 ('T' or 'F')
+            assigned_vars: 既に設定された変数のセット
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            モック戻り値設定コードのリスト、またはNone
+        """
+        if not hasattr(parsed_data, 'local_var_assignments') or not parsed_data.local_var_assignments:
+            return None
+        
+        # 条件式から変数を抽出
+        variables = self.boundary_calc.extract_variables(cond)
+        
+        results = []
+        
+        for var in variables:
+            # ローカル変数かつ外部関数から初期化されているかチェック
+            if var in parsed_data.local_var_assignments:
+                func_name = parsed_data.local_var_assignments[var]
+                
+                # 外部関数（モック対象）かチェック
+                if func_name in parsed_data.external_functions:
+                    # ローカル変数の初期化式を取得して入力パラメータを探す
+                    input_param = self._get_input_param_for_local_var(var, parsed_data)
+                    
+                    # 条件に応じた値を計算
+                    param_value = self._calculate_mock_value_for_condition(cond, var, truth_val)
+                    
+                    if input_param:
+                        # 入力パラメータが既に設定済みならスキップ
+                        if input_param not in assigned_vars:
+                            assigned_vars.add(input_param)
+                            results.append(f"{input_param} = {param_value};  // {var} {self._get_condition_description(cond, truth_val)}")
+                        
+                        # v5.1.13.5: 入力パラメータがある場合でもモック戻り値も設定
+                        # 理由: モック関数は mock_xxx_return_value を返すため、
+                        #       入力パラメータの値をモック戻り値にも反映する必要がある
+                        mock_var = f"mock_{func_name}_return_value"
+                        if mock_var not in assigned_vars:
+                            assigned_vars.add(mock_var)
+                            results.append(f"{mock_var} = {param_value};  // {var} のモック戻り値")
+                    else:
+                        # 入力パラメータが見つからない場合はモック戻り値のみを設定
+                        mock_var = f"mock_{func_name}_return_value"
+                        
+                        # 既に設定済みならスキップ
+                        if mock_var in assigned_vars:
+                            continue
+                        
+                        assigned_vars.add(mock_var)
+                        results.append(f"{mock_var} = {param_value};  // {var} {self._get_condition_description(cond, truth_val)}")
+        
+        return results if results else None
+    
+    def _get_input_param_for_local_var(self, var_name: str, parsed_data: ParsedData) -> Optional[str]:
+        """
+        ローカル変数の入力パラメータを取得 (v5.1.13.1追加)
+        
+        ローカル変数が関数呼び出しから初期化されている場合、
+        その関数の第1引数（入力パラメータ）を取得する。
+        
+        例: temp = clamp_value(raw_temp, -50, 60) → raw_temp
+        
+        v5.1.13.3: 第1引数がローカル変数の場合はNoneを返す（モック戻り値で制御）
+        
+        Args:
+            var_name: ローカル変数名
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            入力パラメータ名、またはNone
+        """
+        if not hasattr(parsed_data, 'local_variables') or not parsed_data.local_variables:
+            return None
+        
+        if var_name not in parsed_data.local_variables:
+            return None
+        
+        local_var_info = parsed_data.local_variables[var_name]
+        
+        if not local_var_info.is_initialized or not local_var_info.initial_value:
+            return None
+        
+        # 初期化式から関数呼び出しの第1引数を抽出
+        # 例: "clamp_value(raw_temp, -50, 60)" → "raw_temp"
+        init_value = local_var_info.initial_value
+        
+        # 関数呼び出しパターン: func_name(arg1, arg2, ...)
+        match = re.match(r'\w+\s*\(\s*(\w+)\s*[,\)]', init_value)
+        if match:
+            first_arg = match.group(1)
+            
+            # v5.1.13.3: 第1引数がローカル変数の場合はNoneを返す
+            # この場合、モック戻り値で制御する必要がある
+            if first_arg in parsed_data.local_variables:
+                return None
+            
+            # 第1引数が関数パラメータかチェック
+            if parsed_data.function_info and parsed_data.function_info.parameters:
+                for param in parsed_data.function_info.parameters:
+                    if param.get('name') == first_arg:
+                        return first_arg
+            
+            # 第1引数がグローバル変数かチェック（ただしローカル変数と同名でない）
+            if first_arg in parsed_data.global_variables:
+                return first_arg
         
         return None
+    
+    def _calculate_mock_value_for_condition(self, cond: str, var: str, truth_val: str) -> int:
+        """
+        条件式に基づいてモック戻り値を計算 (v5.1.13追加)
+        
+        Args:
+            cond: 条件式
+            var: 変数名
+            truth_val: 真偽値
+        
+        Returns:
+            設定すべき値
+        """
+        # 比較式をパース
+        parsed = self.boundary_calc.parse_comparison(cond)
+        
+        if parsed:
+            operator = parsed.get('operator', '==')
+            value = parsed.get('value', 0)
+            
+            # 値が数値でない場合はデフォルト
+            if not isinstance(value, (int, float)):
+                value = 0
+            
+            return self.boundary_calc.calculate_boundary(operator, int(value), truth_val)
+        
+        # パースできない場合はデフォルト値
+        if truth_val == 'T':
+            return 1
+        else:
+            return 0
+    
+    def _get_condition_description(self, cond: str, truth_val: str) -> str:
+        """
+        条件の説明文を生成 (v5.1.13追加)
+        
+        Args:
+            cond: 条件式
+            truth_val: 真偽値
+        
+        Returns:
+            説明文
+        """
+        truth_desc = "を満たす" if truth_val == 'T' else "を満たさない"
+        
+        # 条件式を短縮
+        short_cond = cond.strip()
+        if len(short_cond) > 30:
+            short_cond = short_cond[:27] + "..."
+        
+        return f"{short_cond} {truth_desc}"
     
     def _expand_to_leaf_conditions(self, condition: Condition) -> List[str]:
         """
