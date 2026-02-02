@@ -2625,6 +2625,9 @@ class TestFunctionGenerator:
         """
         呼び出し回数チェックコードを生成
         
+        v5.1.13: 実行パスからモック呼び出し回数を推測
+        注: ネスト条件がある場合は正確な判定が困難なため、コメントとして出力
+        
         Args:
             test_case: テストケース
             parsed_data: 解析済みデータ
@@ -2633,23 +2636,148 @@ class TestFunctionGenerator:
             呼び出し回数チェックコード
         """
         lines = []
+        lines.append("    // モック呼び出し回数の確認")
         
-        # v5.1.4: モック呼び出し回数のチェックは正確に生成できないため
-        # コメントとして出力し、ユーザーが必要に応じて修正できるようにする
-        lines.append("    // モック呼び出し回数の確認（必要に応じて期待値を調整してください）")
+        # 各モック関数の呼び出し回数を計算
+        call_counts = self._calculate_mock_call_counts(test_case, parsed_data)
         
         for func_name in parsed_data.external_functions:
-            # 条件式に含まれているか確認
-            if func_name in test_case.condition:
-                expected_count = 1
-                lines.append(f"    // TEST_ASSERT_EQUAL({expected_count}, mock_{func_name}_call_count);")
-            else:
-                # 条件式に含まれていない場合、呼び出し回数は不明
-                # （条件が偽の場合、後続のコードで呼ばれる可能性がある）
-                lines.append(f"    // TEST_ASSERT_EQUAL(/* 要確認 */, mock_{func_name}_call_count);")
+            expected_count = call_counts.get(func_name, 0)
+            # コメントとして出力（実行パス判定が複雑なため）
+            lines.append(f"    // TEST_ASSERT_EQUAL({expected_count}, mock_{func_name}_call_count);")
         
         lines.append("")
         return '\n'.join(lines)
+    
+    def _calculate_mock_call_counts(self, test_case: TestCase, parsed_data: ParsedData) -> Dict[str, int]:
+        """
+        モック関数の呼び出し回数を計算（v5.1.13追加）
+        
+        実行パスを分析して、各モック関数が何回呼ばれるかを計算する。
+        
+        Args:
+            test_case: テストケース
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            {関数名: 呼び出し回数} の辞書
+        """
+        call_counts = {}
+        
+        # ローカル変数の代入元関数を取得
+        local_var_assignments = getattr(parsed_data, 'local_var_assignments', {})
+        
+        # テストケースの条件インデックスを取得
+        condition_idx = self._get_condition_index(test_case.condition, parsed_data)
+        
+        # 実行パスを判定: 条件が真でreturnする場合は早期終了
+        # 条件が偽の場合、または最後の条件の場合は後続コードが実行される
+        
+        # 早期returnの判定
+        # - 単純条件（T）で、最後の条件でない場合は早期return
+        # - OR条件でTF/FT/FFで条件全体が真になる場合は早期return
+        early_return = self._is_early_return(test_case, condition_idx, parsed_data)
+        
+        if early_return:
+            # 早期returnの場合、ローカル変数に関連するモック関数は呼ばれない
+            # 条件式に含まれる関数のみカウント
+            for func_name in parsed_data.external_functions:
+                if func_name in test_case.condition:
+                    call_counts[func_name] = 1
+                else:
+                    call_counts[func_name] = 0
+        else:
+            # 最終returnまで到達する場合、ローカル変数のモック呼び出しをカウント
+            for var_name, func_name in local_var_assignments.items():
+                if func_name in parsed_data.external_functions:
+                    if func_name not in call_counts:
+                        call_counts[func_name] = 0
+                    call_counts[func_name] += 1
+        
+        return call_counts
+    
+    def _is_early_return(self, test_case: TestCase, condition_idx: Optional[int], 
+                         parsed_data: ParsedData) -> bool:
+        """
+        早期returnするかどうかを判定（v5.1.13追加）
+        
+        Args:
+            test_case: テストケース
+            condition_idx: 条件のインデックス
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            早期returnする場合True
+        """
+        if condition_idx is None:
+            return False
+        
+        # 最後の条件の場合は早期returnしない（ローカル変数は既に評価済み）
+        is_last_condition = (condition_idx == len(parsed_data.conditions) - 1)
+        
+        if is_last_condition:
+            return False
+        
+        # 条件情報を取得
+        cond = parsed_data.conditions[condition_idx] if condition_idx < len(parsed_data.conditions) else None
+        if not cond:
+            return False
+        
+        # ネストされた条件（親条件がある）の場合
+        # 親条件が真でもネスト条件が偽なら処理は続行
+        # → 正確な判定は困難なので、ネスト条件の親は早期returnしないと判定
+        if hasattr(cond, 'parent_condition') and cond.parent_condition:
+            # 親条件の場合、ネストの結果次第で処理が続く可能性がある
+            return False
+        
+        # 条件タイプを取得
+        cond_type = getattr(cond, 'type', None)
+        
+        # 単純条件でTの場合
+        if test_case.truth == 'T':
+            # ネストの親条件でない場合のみ早期return
+            # ネストがあるかどうかを確認
+            has_nested = self._has_nested_condition(condition_idx, parsed_data)
+            if has_nested:
+                return False  # ネストがある場合、ネスト条件次第
+            return True
+        
+        # OR条件/AND条件で条件全体が真になる場合
+        truth = test_case.truth
+        if 'T' in truth and cond_type:
+            from src.data_structures import ConditionType
+            if cond_type == ConditionType.OR_CONDITION:
+                # OR条件で1つでもTがあれば真 → 早期return
+                return True
+            elif cond_type == ConditionType.AND_CONDITION:
+                # AND条件で全てTの場合のみ早期return
+                return all(t == 'T' for t in truth)
+        
+        return False
+    
+    def _has_nested_condition(self, condition_idx: int, parsed_data: ParsedData) -> bool:
+        """指定された条件にネストされた条件があるかどうかを判定"""
+        if condition_idx >= len(parsed_data.conditions) - 1:
+            return False
+        
+        # 次の条件がネストされているかチェック
+        current_cond = parsed_data.conditions[condition_idx]
+        next_cond = parsed_data.conditions[condition_idx + 1]
+        
+        # ネストの判定（行番号や親子関係から）
+        if hasattr(next_cond, 'parent_condition'):
+            return next_cond.parent_condition is not None
+        
+        # 簡易判定: 条件3(g_total_calls > 1)の後に条件4(raw_temp > ...)がある場合
+        # 条件4はネストされている
+        return False
+    
+    def _get_condition_index(self, condition: str, parsed_data: ParsedData) -> Optional[int]:
+        """条件のインデックスを取得"""
+        for i, cond in enumerate(parsed_data.conditions):
+            if cond.expression in condition or condition in cond.expression:
+                return i
+        return None
 
 
     def _is_function(self, name: str, parsed_data: ParsedData) -> bool:

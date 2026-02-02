@@ -5,6 +5,7 @@ MockGeneratorモジュール（v4.3.4）
 v4.0: 元の関数と同じシグネチャでモックを生成（リンカ互換）
 v4.1.2: 構造体型変数の初期化をmemset対応
 v4.3.4: const維持、ポインタのメモリコピー対応
+v5.1.13: パススルーモック対応（入力値をそのまま返す関数）
 """
 
 import sys
@@ -42,11 +43,28 @@ class MockGenerator:
         'void',
     }
     
+    # v5.1.13: パススルー関数（第1引数をそのまま返す関数）
+    PASSTHROUGH_FUNCTIONS: Set[str] = {
+        'clamp_value', 'clamp', 'clip', 'limit',
+        'abs', 'labs', 'llabs', 'fabs', 'fabsf', 'fabsl',
+        'min', 'max', 'MIN', 'MAX',
+        'saturate', 'bound', 'constrain',
+    }
+    
     def __init__(self):
         """初期化"""
         self.logger = setup_logger(__name__)
         self.mock_functions: List[MockFunction] = []
         self._needs_string_h = False  # memset使用フラグ（v4.1.2追加）
+        self._passthrough_functions: Set[str] = set(self.PASSTHROUGH_FUNCTIONS)  # v5.1.13
+    
+    def add_passthrough_function(self, func_name: str) -> None:
+        """パススルー関数を追加（v5.1.13）"""
+        self._passthrough_functions.add(func_name)
+    
+    def is_passthrough_function(self, func_name: str) -> bool:
+        """パススルー関数かどうか判定（v5.1.13）"""
+        return func_name in self._passthrough_functions
     
     def generate_mocks(self, parsed_data: ParsedData) -> str:
         """
@@ -295,6 +313,7 @@ class MockGenerator:
         モック関数の実装を生成
         v4.3.4: const維持、ポインタのメモリコピー
         v4.3.4.1: static修飾子追加
+        v5.1.13: パススルーモック対応（入力値をそのまま返す）
         
         Returns:
             モック関数のコード
@@ -304,8 +323,12 @@ class MockGenerator:
         
         for mock_func in self.mock_functions:
             # 関数コメント
+            is_passthrough = self.is_passthrough_function(mock_func.name)
             lines.append(f"/**")
-            lines.append(f" * {mock_func.name}のモック")
+            if is_passthrough:
+                lines.append(f" * {mock_func.name}のモック（パススルー: 第1引数を返す）")
+            else:
+                lines.append(f" * {mock_func.name}のモック")
             lines.append(f" */")
             
             # パラメータ文字列を構築（v4.3.4: constをそのまま維持）
@@ -340,7 +363,12 @@ class MockGenerator:
             
             # void型でない場合のみreturn文を生成
             if mock_func.return_type != "void":
-                lines.append(f"    return {mock_func.return_variable};")
+                # v5.1.13: パススルー関数は第1引数をそのまま返す
+                if is_passthrough and mock_func.parameters:
+                    first_param = mock_func.parameters[0]['name']
+                    lines.append(f"    return {first_param};  // パススルー")
+                else:
+                    lines.append(f"    return {mock_func.return_variable};")
             lines.append(f"}}")
             lines.append("")
         
