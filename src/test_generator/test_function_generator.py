@@ -1161,6 +1161,8 @@ class TestFunctionGenerator:
         """
         OR条件の初期化コードを生成 (v5.0.3: 葉条件展開対応)
         
+        v5.1.12: OR条件では真(T)の条件の入力値を優先
+        
         Args:
             condition: 条件
             truth: 真偽パターン
@@ -1191,50 +1193,112 @@ class TestFunctionGenerator:
             'sizeof', 'offsetof'
         }
         
-        # 各葉条件に対して値を設定
+        # v5.1.12: OR条件では真(T)の条件を先に処理し、偽(F)の条件は同じ変数なら追加しない
+        # 理由: OR条件が成立するには少なくとも1つの条件が真である必要があり、
+        #       真になる条件の入力値を優先すべき
+        
+        # まず各条件の値を計算（真偽値と一緒に保持）
+        condition_values = []
         for i, cond in enumerate(leaf_conditions):
             if i < len(truth):
                 truth_val = truth[i]
                 test_value = self.boundary_calc.generate_test_value_with_parsed_data(cond, truth_val, parsed_data)
-                
-                if test_value:
-                    # 関数呼び出しが含まれる場合はコメントとしてそのまま追加
-                    if test_value.startswith("//"):
-                        init_list.append(test_value)
-                    else:
-                        # 関数やenum定数の誤使用を修正
-                        test_value = self._validate_and_fix_init_code(test_value, parsed_data)
-                        init_list.append(test_value)
-                else:
-                    # デフォルト値
-                    variables = self.boundary_calc.extract_variables(cond)
-                    if variables:
-                        # v4.8.5: 標準ライブラリ関数名を除外
-                        valid_vars = [v for v in variables if v not in stdlib_funcs]
-                        if not valid_vars:
-                            # すべての変数が関数名の場合、条件式に含まれる関数のモック設定を提案
-                            func_names = [v for v in variables if v in stdlib_funcs]
-                            if func_names:
-                                init_list.append(f"// {func_names[0]}() の戻り値でテスト条件が決まります")
-                            continue
-                        
-                        var = valid_vars[0]
-                        
-                        # 関数呼び出しかチェック
-                        if self._is_function_call_pattern(var):
-                            func_name = var.replace('()', '').strip()
-                            init_list.append(f"// mock_{func_name}_return_value を設定してください")
-                            continue
-                        
-                        # 関数またはenum定数でないことを確認
-                        if self._is_function_or_enum(var, parsed_data):
-                            init_list.append(f"// {var}は関数またはenum定数のため初期化できません")
-                        else:
-                            # v3.3.0: ValueResolverを使用
-                            init_val, comment = value_resolver.get_boolean_init_value(truth_val)
-                            init_list.append(f"{var} = {init_val};  // {comment}")
+                condition_values.append((cond, truth_val, test_value))
+        
+        # 設定済みの変数を追跡
+        assigned_vars = set()
+        
+        # 真(T)の条件を先に処理
+        for cond, truth_val, test_value in condition_values:
+            if truth_val == 'T':
+                processed = self._process_condition_value(
+                    cond, truth_val, test_value, assigned_vars, 
+                    stdlib_funcs, value_resolver, parsed_data
+                )
+                if processed:
+                    init_list.append(processed)
+        
+        # 偽(F)の条件を後に処理（同じ変数が既に設定されていればスキップ）
+        for cond, truth_val, test_value in condition_values:
+            if truth_val == 'F':
+                processed = self._process_condition_value(
+                    cond, truth_val, test_value, assigned_vars,
+                    stdlib_funcs, value_resolver, parsed_data
+                )
+                if processed:
+                    init_list.append(processed)
         
         return init_list
+    
+    def _process_condition_value(self, cond: str, truth_val: str, test_value: Optional[str],
+                                  assigned_vars: set, stdlib_funcs: set,
+                                  value_resolver, parsed_data: ParsedData) -> Optional[str]:
+        """
+        条件の値を処理して初期化コードを生成 (v5.1.12追加)
+        
+        Args:
+            cond: 条件式
+            truth_val: 真偽値 ('T' or 'F')
+            test_value: 生成されたテスト値
+            assigned_vars: 既に設定された変数のセット
+            stdlib_funcs: 標準ライブラリ関数名のセット
+            value_resolver: ValueResolverインスタンス
+            parsed_data: 解析済みデータ
+        
+        Returns:
+            初期化コード（スキップする場合はNone）
+        """
+        if test_value:
+            # 関数呼び出しが含まれる場合はコメントとしてそのまま追加
+            if test_value.startswith("//"):
+                return test_value
+            else:
+                # 変数名を抽出
+                var_match = re.match(r'(\w+)\s*=', test_value)
+                if var_match:
+                    var_name = var_match.group(1)
+                    # 既に設定済みならスキップ
+                    if var_name in assigned_vars:
+                        return None
+                    assigned_vars.add(var_name)
+                
+                # 関数やenum定数の誤使用を修正
+                test_value = self._validate_and_fix_init_code(test_value, parsed_data)
+                return test_value
+        else:
+            # デフォルト値
+            variables = self.boundary_calc.extract_variables(cond)
+            if variables:
+                # v4.8.5: 標準ライブラリ関数名を除外
+                valid_vars = [v for v in variables if v not in stdlib_funcs]
+                if not valid_vars:
+                    # すべての変数が関数名の場合、条件式に含まれる関数のモック設定を提案
+                    func_names = [v for v in variables if v in stdlib_funcs]
+                    if func_names:
+                        return f"// {func_names[0]}() の戻り値でテスト条件が決まります"
+                    return None
+                
+                var = valid_vars[0]
+                
+                # 既に設定済みならスキップ
+                if var in assigned_vars:
+                    return None
+                
+                # 関数呼び出しかチェック
+                if self._is_function_call_pattern(var):
+                    func_name = var.replace('()', '').strip()
+                    return f"// mock_{func_name}_return_value を設定してください"
+                
+                # 関数またはenum定数でないことを確認
+                if self._is_function_or_enum(var, parsed_data):
+                    return f"// {var}は関数またはenum定数のため初期化できません"
+                else:
+                    assigned_vars.add(var)
+                    # v3.3.0: ValueResolverを使用
+                    init_val, comment = value_resolver.get_boolean_init_value(truth_val)
+                    return f"{var} = {init_val};  // {comment}"
+        
+        return None
     
     def _expand_to_leaf_conditions(self, condition: Condition) -> List[str]:
         """
